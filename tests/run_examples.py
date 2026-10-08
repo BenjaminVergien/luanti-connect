@@ -155,7 +155,7 @@ def check_lifecycle_examples():
         check('switch-failed-restored', 'switch_world', 'test', fail_world='test')
         check('start-failed-selection-restored', 'start_world', 'test', current=None, fail_world='test')
         check('switch-failed-rollback-failed', 'switch_world', 'test', fail_world='test', fail_cleanup=True)
-    print('PASS: all lifecycle response fixtures match current controller behavior; proposed requests are test mappings only')
+    print('PASS: all lifecycle response fixtures match current controller behavior; run run_world_worker.py for JSON worker dispatch')
 
 
 def main():

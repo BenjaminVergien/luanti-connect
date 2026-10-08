@@ -1,10 +1,10 @@
 # World-control examples
 
-**The files in `proposed-requests/` are proposed input for a future CiviCRM worker, not a currently implemented JSON endpoint.** Do not publish them in the bridge inbox or pass them to `tools/simulate.py`. Today the controller takes the exact CLI arguments below and writes JSON to standard output. The response files reflect that implemented contract; PIDs are illustrative.
+**The files in `proposed-requests/` are now implemented input for the local JSON worker.** The directory name is retained for existing links. Run `python3 tools/world_worker.py examples/lifecycle/proposed-requests/status.json` from the repository. See the [worker contract and recovery rules](../../tools/WORLD_WORKER.md). Do not publish lifecycle requests in the bridge inbox or pass them to `tools/simulate.py`. The privileged controller still takes the exact CLI arguments below. Response files show its output without the worker's added `version` and `job_id`; PIDs are illustrative.
 
 ## Actions
 
-| Proposed worker input | Current CLI | Typical response |
+| Worker input | Controller CLI | Typical controller response |
 | --- | --- | --- |
 | [status](proposed-requests/status.json) | `sudo -n /usr/local/sbin/civicrm-worldctl status` | [running dev](responses/status-running-dev.json) |
 | [stop-world](proposed-requests/stop-world.json) | `sudo -n /usr/local/sbin/civicrm-worldctl stop_world` | [stopped](responses/stop-world.json) |
@@ -13,7 +13,7 @@
 | [switch-dev](proposed-requests/switch-dev.json) | `sudo -n /usr/local/sbin/civicrm-worldctl switch_world dev` | [switched to dev](responses/switch-dev.json) |
 | [switch-test](proposed-requests/switch-test.json) | `sudo -n /usr/local/sbin/civicrm-worldctl switch_world test` | [switched to test](responses/switch-test.json) |
 
-The proposed envelope contains `version: 1`, a correlation `job_id`, `operation`, and `world_id` for start/switch. No dispatcher validates or deduplicates this envelope today. A future worker would validate it, authorize the target, and map it to a fixed argument list. Do not concatenate caller-supplied commands or accept arbitrary world paths. `status` and `stop_world` act on the one service and need no world ID; stop does not accept a target world parameter.
+The envelope contains integer `version: 1`, a correlation `job_id`, `operation`, and `world_id` for start/switch. The worker strictly validates fields, maps them to fixed argument lists, and records durable receipts. Existing SSH/account and exact sudo grants authorize invocation. `status` and `stop_world` act on the one service and forbid a world ID; stop does not accept a target world parameter.
 
 `dev` and `test` are currently the only allowed IDs. The installed root-owned configuration maps IDs to paths. This permits selecting existing worlds, not creating them. See [installation and rollback](../../lifecycle/README.md).
 
@@ -33,7 +33,7 @@ The proposed envelope contains `version: 1`, a correlation `job_id`, `operation`
 
 All four status forms are illustrated: [running](responses/status-running-dev.json), [starting](responses/status-starting-test.json), [stopped](responses/status-stopped.json), [unmanaged](responses/status-unmanaged.json). A transitioning service can have `active: true` and `pid: 0`. An unmanaged active process is not stopped or replaced by the controller.
 
-No-op examples: [start the same world](responses/start-same-world.json), [switch to the same world](responses/switch-same-world.json), and [stop an already stopped service](responses/stop-already-stopped.json). A ready same-world command does not restart it. Starting a different active world returns [already_running](responses/already-running.json); use switch instead. Repeated commands inspect current state, rather than replaying a durable job receipt.
+No-op examples: [start the same world](responses/start-same-world.json), [switch to the same world](responses/switch-same-world.json), and [stop an already stopped service](responses/stop-already-stopped.json). A ready same-world command does not restart it. Starting a different active world returns [already_running](responses/already-running.json); use switch instead. Direct CLI commands inspect current state. The JSON worker replays completed receipts for identical IDs/bytes; use a fresh ID for a new decision or current status query.
 
 ## Errors and recovery
 
@@ -49,10 +49,10 @@ An implemented controller error has `ok: false` and an `error` object containing
 | `start_failed`, `switch_failed` | Inspect rollback details and status |
 | `permission_denied`, `configuration_error`, `invalid_configuration`, `unsafe_configuration`, `unsafe_state`, `invalid_state`, `lock_error` | Installation/state/permissions need operator attention |
 
-Unknown IDs are also excluded by the exact sudo command grant; do not expect an arbitrary ID to reach the controller and return JSON. The future worker should reject unconfigured IDs before invocation.
+Unknown IDs are also excluded by the exact sudo command grant. The worker rejects IDs other than `dev` and `test` before invocation.
 
 Examples include [busy](responses/busy.json), [failed switch with prior world restored](responses/switch-failed-restored.json), [failed start with stopped selection restored](responses/start-failed-selection-restored.json), and [failed rollback](responses/switch-failed-rollback-failed.json). `details.cause` gives the underlying failure code. `details.previous_world_id` identifies the former running world or former stopped selection.
 
 `rollback: restored` means the previously running world became ready again. `selection_restored` means it was previously stopped and remains stopped with its old selection. `failed` means recovery did not complete; do not assume any world is ready. Failures while stopping the original service can return directly without a rollback object. Preserve the error and inspect a fresh status.
 
-Switching saves/stops the current world before starting the next; clients disconnect and must reconnect. Accounts and queued jobs stay in their own worlds. This is not a player transfer or an account-copy operation. Use readiness before publishing dependent account jobs. The lifecycle JSON examples carry proposed correlation IDs, but actual CLI outputs contain neither `job_id` nor `version`; correlation and retry records belong to the future worker.
+Switching saves/stops the current world before starting the next; clients disconnect and must reconnect. Accounts and queued jobs stay in their own worlds. This is not a player transfer or an account-copy operation. Use readiness before publishing dependent account jobs. Actual controller CLI outputs contain neither `job_id` nor `version`; the JSON worker adds them and stores its own retry records.

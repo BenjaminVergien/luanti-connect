@@ -2,7 +2,7 @@
 
 See [GitHub code archiving](tools/ARCHIVING.md) for repository credentials and checks before pushing.
 
-For the later CiviCRM component, start with the [integration contract](docs/INTEGRATION.md) and [request/response example catalog](examples/README.md). They distinguish implemented account JSON, implemented world-control commands, and proposed adapter JSON.
+For the later CiviCRM component, start with the [integration contract](docs/INTEGRATION.md) and [request/response example catalog](examples/README.md). They describe implemented account JSON, world-control commands, and the [local lifecycle JSON worker](tools/WORLD_WORKER.md).
 
 A small Luanti mod for local JSON account imports. This first version uses fictitious participants, the existing Luanti authentication API, and a filesystem inbox. It creates accounts, synchronizes roles and admission, and writes JSON results while the server runs. It does not connect to CiviCRM yet.
 
@@ -101,6 +101,7 @@ Run the isolated engine integration checks on the server:
 python3 tests/run_integration.py
 python3 tests/run_examples.py
 python3 tests/run_lifecycle.py
+python3 tests/run_world_worker.py
 ```
 
 The engine tests use disposable worlds, isolated user homes with a shared mod installation, and loopback-only ports. The example checks compare the published account response fixtures to real engine results and lifecycle response fixtures to the controller with a fake service. The lifecycle suite separately checks real process transitions and systemd safety fixtures. They do not control the live development service. Also check login, role updates, withdrawal, and readmission with a real client in the development world.

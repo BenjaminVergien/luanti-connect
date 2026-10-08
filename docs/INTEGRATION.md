@@ -20,7 +20,7 @@ This describes the implemented prototype, not a public API or an implemented Civ
 | Start configured world `dev` or `test` | `civicrm-worldctl start_world WORLD_ID` returning JSON | [Lifecycle examples](../examples/lifecycle/README.md) |
 | Switch to configured world `dev` or `test` | `civicrm-worldctl switch_world WORLD_ID` returning JSON | [Lifecycle examples](../examples/lifecycle/README.md) |
 
-Only `sync_accounts` is accepted as an inbox JSON operation today. Lifecycle request JSON in the examples is a proposal for the future worker; it is not accepted by the mod, simulator or controller. The controller already returns JSON, but takes command-line arguments. Do not send lifecycle requests to the account inbox.
+Only `sync_accounts` is accepted as an inbox JSON operation. Lifecycle JSON is accepted by the [local worker](../tools/WORLD_WORKER.md), invoked as `python3 tools/world_worker.py REQUEST.json`, separately from the mod and simulator. The privileged controller takes command-line arguments. Do not send lifecycle requests to the account inbox.
 
 ## Account request v1
 
@@ -110,9 +110,9 @@ Jobs queued for a stopped world stay queued until that world starts. Switching w
 
 ## World lifecycle and future worker routing
 
-Use the [lifecycle request proposals and actual response examples](../examples/lifecycle/README.md). Map each permitted operation to a fixed command argument list, never a shell string supplied by a caller. `dev` and `test` are administrator-configured IDs. Arbitrary paths, game IDs and service names are not request parameters.
+Use the [lifecycle requests and controller response examples](../examples/lifecycle/README.md) with the [local worker](../tools/WORLD_WORKER.md). The worker maps permitted operations to fixed argument lists without a shell. `dev` and `test` are administrator-configured IDs. Arbitrary paths, game IDs and service names are not request parameters.
 
-Current commands use the narrowly permitted `sudo -n /usr/local/sbin/civicrm-worldctl ...` wrapper. Luanti continues running as `ben`; the worker/developer account does not have general sudo. Lifecycle output uses `ok` and controller state/error fields; it has no account protocol `version` or `job_id`. A future worker must keep its own correlation ID and lifecycle receipts. Do not claim the account receipt mechanism deduplicates world-control requests.
+Current commands use the narrowly permitted `sudo -n /usr/local/sbin/civicrm-worldctl ...` wrapper. Luanti continues running as `ben`; the worker/developer account does not have general sudo. Controller output uses `ok` and state/error fields. The worker adds `version: 1` and `job_id`, with its own private durable receipts outside worlds and Git. Identical retries replay recorded results; changed bytes conflict. Interrupted pending jobs never automatically reexecute. Use fresh IDs for current status queries and inspect status after uncertain outcomes. Account receipts do not deduplicate world-control requests.
 
 Only one world runs on the service/port. `status` reports the running world and selected world separately. `start_world` leaves the same ready world running, refuses another active world, and starts a stopped service. `stop_world` is idempotent and retains selection/data. `switch_world` validates the target before stopping, waits for readiness, and attempts to restore the prior world after failed target startup. Switching disconnects clients; they must reconnect. It does not migrate players or copy accounts.
 
@@ -120,7 +120,7 @@ Use `ready: true` rather than successful process creation alone. On failure insp
 
 ## Design decisions for the CiviCRM component
 
-The future component needs a trusted worker and a transport; neither exists yet. The current mod trusts authorized local inbox writers and does not validate a shared password, signature, HTTP token or SSH identity inside JSON. Do not expose its inbox through an unauthenticated upload endpoint. Keep CiviCRM/GitHub/Hetzner credentials outside jobs, results and Git. A deployment key used to archive this code is separate from credentials used to submit bridge jobs.
+The local lifecycle worker exists; a CiviCRM component, account-delivery worker, and authenticated network transport still need implementation. The current mod trusts authorized local inbox writers and does not validate a shared password, signature, HTTP token or SSH identity inside JSON. Do not expose its inbox through an unauthenticated upload endpoint. Keep CiviCRM/GitHub/Hetzner credentials outside jobs, results and Git. A deployment key used to archive this code is separate from credentials used to submit bridge jobs.
 
 Keep an external mapping from CiviCRM contact to stable Luanti username, scoped to the world. Display names and email changes should not rename Luanti accounts. Store CiviCRM contact/event/participation identifiers and audit/correlation metadata in the integration database; the mod does not store or return them. Avoid sending personal data that the mod does not need.
 
@@ -132,4 +132,4 @@ For dependent operations, start/switch the intended world, wait for readiness, p
 
 ## Not implemented
 
-Password reset, account deletion/rename, arbitrary privilege grants, individual kick commands, roster/account querying, CiviCRM event membership storage, authenticated network delivery, provisioning Hetzner servers, world creation/cloning/deletion and a lifecycle JSON dispatcher are not available operations. The installer prepares the existing `dev` and a fresh `test` world; this is not a runtime world-creation API. Do not invent request names for these in the CiviCRM component until corresponding handlers and contracts exist.
+Password reset, account deletion/rename, arbitrary privilege grants, individual kick commands, roster/account querying, CiviCRM event membership storage, authenticated network delivery, provisioning Hetzner servers, and world creation/cloning/deletion are not available operations. The installer prepares the existing `dev` and a fresh `test` world; this is not a runtime world-creation API. Do not invent request names for these in the CiviCRM component until corresponding handlers and contracts exist.

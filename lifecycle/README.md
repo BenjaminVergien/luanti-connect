@@ -23,6 +23,8 @@ The installer validates sudoers before activation, reloads systemd, and verifies
 
 ## Commands
 
+For validated JSON input, run the unprivileged [local lifecycle worker](../tools/WORLD_WORKER.md): `python3 tools/world_worker.py REQUEST.json`. It uses these existing restricted commands and requires no additional sudo grants or root installation. Its receipts live in the SSH account's private home state directory.
+
 The dedicated developer account receives passwordless sudo access only to these exact commands:
 
 ```bash

@@ -45,7 +45,7 @@ Use `--job-id NEW_ID` for a new decision or corrected job. That is not a retry: 
 ## Other example directories
 
 - [errors/](errors/README.md): deliberately rejected account requests and partial-batch results. Some require raw publication because the simulator rejects invalid fields before delivery.
-- [lifecycle/](lifecycle/README.md): proposed CiviCRM worker JSON requests, their current CLI equivalents, and actual controller response shapes. Lifecycle JSON input is not implemented.
+- [lifecycle/](lifecycle/README.md): implemented local worker JSON requests, their controller CLI equivalents, and actual controller response shapes. The worker adds correlation fields and durable receipts; the historical `proposed-requests/` path is retained.
 - [expected/](expected/): complete account output JSON; never submit these files as requests.
 
 Do not recursively submit all JSON files. Only the eight numbered root-level files are the successful runnable account sequence.
