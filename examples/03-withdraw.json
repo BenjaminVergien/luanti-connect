@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "job_id": "demo-003-withdraw",
+  "operation": "sync_accounts",
+  "accounts": [
+    { "username": "demo_player", "role": "facilitator", "admitted": false }
+  ]
+}

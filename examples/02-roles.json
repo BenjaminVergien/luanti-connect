@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "job_id": "demo-002-roles",
+  "operation": "sync_accounts",
+  "accounts": [
+    { "username": "demo_player", "role": "facilitator", "admitted": true },
+    { "username": "demo_facilitator", "role": "participant", "admitted": true }
+  ]
+}
