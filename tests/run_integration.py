@@ -249,6 +249,24 @@ def run(h):
     assert state["denial"] is False and state["password"] == changed_password
     assert h.snapshot("other_demo")["exists"], "Omitted account was removed"
     assert h.snapshot("ben")["denial"] is False
+    # Exercise the actual CLI and checked-in examples, including the final
+    # readmission which deliberately restores the participant role.
+    repo = Path(__file__).resolve().parent.parent
+    for example in sorted((repo / "examples").glob("*.json")):
+        submitted = json.loads(example.read_text())
+        simulation = subprocess.run([
+            "python3", str(repo / "tools" / "simulate.py"),
+            "--runtime-dir", str(h.runtime), str(example),
+        ], text=True, capture_output=True, timeout=20)
+        assert simulation.returncode == 0, simulation.stdout + simulation.stderr
+        for entry in submitted["accounts"]:
+            snapshot = h.snapshot(entry["username"])
+            assert snapshot["exists"]
+            assert bool(snapshot["denial"]) == (not entry["admitted"])
+            assert bool(snapshot["privileges"].get("fly")) == (entry["role"] == "facilitator")
+            if "initial_password" in entry:
+                assert entry["initial_password"] not in simulation.stdout
+                SECRETS.append(entry["initial_password"])
     # Corrupt receipts cannot be mistaken for a successful replay. The bridge
     # retains input, halts imports, and denies non-admin logins until repaired.
     (h.runtime / "receipts" / "create.json").write_text('{"digest":"x","result":null}')
