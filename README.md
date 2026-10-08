@@ -6,13 +6,15 @@ A small Luanti mod for local JSON account imports. This first version uses ficti
 
 The development setup uses Luanti 5.17.0 with LuaJIT and Minetest Game:
 
-- Mod and standalone Git repository: `/home/ben/luanti-dev/world/worldmods/civicrm_bridge`
+- Shared mod and standalone Git repository: `/home/ben/.minetest/mods/civicrm_bridge`
 - World: `/home/ben/luanti-dev/world`
 - Server configuration: `/home/ben/luanti-dev/server.conf`
 - Runtime inbox and outbox: `/home/ben/luanti-dev/world/civicrm_bridge`
 - Service: `luanti-dev.service`, running as `ben`; client UDP port 30000.
 
-Enable `load_mod_civicrm_bridge = true` in the world's `world.mt`. Precreate the runtime directory and its `inbox`, `outbox`, and `receipts` children with inherited read/write access for both `ben` and the developer SSH account `codex_civicrmbridge`. Both accounts need directory traversal and file creation/deletion access. Keep runtime files accessible only to the intended local accounts: pending inputs contain initial passwords.
+Enable `load_mod_civicrm_bridge = mods/civicrm_bridge` in each selected world's `world.mt`. The shared mod directory belongs to the operating-system user running Luanti (`ben` here); other service users need their own installation or a configured shared content path. Keep one source copy: do not also place this mod in a world's `worldmods` directory.
+
+Each world keeps its own authentication records, bridge mod storage, and runtime inbox/outbox. The mod derives its runtime directory from `core.get_worldpath()`; worlds do not share account or admission state. Precreate each runtime directory and its `inbox`, `outbox`, and `receipts` children with inherited read/write access for the service user and the intended integration/developer account. Both accounts need directory traversal and file creation/deletion access. Keep runtime files accessible only to the intended local accounts: pending inputs contain initial passwords.
 
 From the existing **ben** session, load the mod with:
 
@@ -41,7 +43,7 @@ python3 tools/simulate.py --job-id demo-password-preserved examples/01-create.js
 
 Keep the player connected during the role and withdrawal jobs to observe live privilege updates and immediate disconnection. The readmission job permits login again without changing the password or deleting player data.
 
-The simulator accepts `--runtime-dir PATH`, `--timeout SECONDS` (default 15), and `--job-id ID`. It atomically publishes a complete input, refuses to overwrite a pending job, waits for the server to consume it, and prints result fields only. Exit codes are 0 for success, 1 for a partial/error result, 2 for input or filesystem errors, and 3 for a timeout. A timeout leaves the job queued; inspect the service and result file before retrying.
+The simulator accepts `--runtime-dir PATH`, `--timeout SECONDS` (default 15), and `--job-id ID`. Its default runtime directory is the development world shown above; use `--runtime-dir /path/to/world/civicrm_bridge` when targeting another world. It atomically publishes a complete input, refuses to overwrite a pending job, waits for the server to consume it, and prints result fields only. Exit codes are 0 for success, 1 for a partial/error result, 2 for input or filesystem errors, and 3 for a timeout. A timeout leaves the job queued; inspect the service and result file before retrying.
 
 ## JSON contract
 
@@ -93,7 +95,7 @@ Run the isolated engine integration checks on the server:
 python3 tests/run_integration.py
 ```
 
-The tests use a temporary world and a loopback-only port. Also check login, role updates, withdrawal, and readmission with a real client in the development world.
+The tests use a temporary world, an isolated user home with a shared mod installation, and a loopback-only port. Also check login, role updates, withdrawal, and readmission with a real client in the development world.
 
 Version only this mod directory. Keep the surrounding world, authentication databases, mod storage, inbox, outbox, and real credentials out of Git. There is no Git remote or automatic push. To stop enforcing the bridge whitelist, disable the mod in `world.mt` and restart the service; account and privilege changes already applied remain in the world.
 

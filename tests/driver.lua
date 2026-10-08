@@ -16,7 +16,7 @@ end
 local function execute(command)
 	local name = command.username
 	if command.operation == "ready" then
-		return {ready = true}
+		return {ready = true, bridge_modpath = core.get_modpath("civicrm_bridge")}
 	elseif command.operation == "snapshot" then
 		local auth = core.get_auth_handler().get_auth(name)
 		return {

@@ -22,6 +22,7 @@ SECRETS = ["Initial-Fictional-Password!", "Player-Changed-Password!", "Ignored-P
 class Harness:
     def __init__(self, engine, mod, base, game_path):
         self.path = Path(tempfile.mkdtemp(prefix="civicrm-bridge-test-", dir=base))
+        self.mod = mod
         self.world = self.path / "world"
         self.world.mkdir()
         self.runtime = self.world / "civicrm_bridge"
@@ -31,7 +32,6 @@ class Harness:
         self.control.mkdir()
         mods = self.world / "worldmods"
         mods.mkdir()
-        (mods / "civicrm_bridge").symlink_to(mod, target_is_directory=True)
         driver = mods / "bridge_test_driver"
         driver.mkdir()
         (driver / "mod.conf").write_text("name = bridge_test_driver\ndepends = civicrm_bridge\n")
@@ -39,7 +39,7 @@ class Harness:
         (self.world / "world.mt").write_text(
             "gameid = minetest\nbackend = sqlite3\nplayer_backend = sqlite3\n"
             "auth_backend = sqlite3\nmod_storage_backend = sqlite3\n"
-            "load_mod_civicrm_bridge = true\nload_mod_bridge_test_driver = true\n"
+            "load_mod_civicrm_bridge = mods/civicrm_bridge\nload_mod_bridge_test_driver = true\n"
         )
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -57,6 +57,9 @@ class Harness:
         isolated_home = self.path / "home"
         games = isolated_home / ".minetest" / "games"
         games.mkdir(parents=True)
+        shared_mods = isolated_home / ".minetest" / "mods"
+        shared_mods.mkdir()
+        (shared_mods / "civicrm_bridge").symlink_to(mod, target_is_directory=True)
         if game_path:
             # Accept either the game itself or the directory containing it.
             if not (game_path / "game.conf").is_file():
@@ -73,7 +76,10 @@ class Harness:
         self.output = (self.path / "process.log").open("ab")
         self.process = subprocess.Popen(self.command, env=self.environment,
                                         stdout=self.output, stderr=subprocess.STDOUT)
-        assert self.control_command("ready")["ready"]
+        readiness = self.control_command("ready")
+        assert readiness["ready"]
+        assert Path(readiness["bridge_modpath"]).resolve() == self.mod.resolve()
+        assert not (self.world / "worldmods" / "civicrm_bridge").exists()
 
     def wait_json(self, path, timeout=20):
         deadline = time.monotonic() + timeout
