@@ -4,6 +4,8 @@ A small Luanti mod for local JSON account imports. This first version uses ficti
 
 ## Installation
 
+For the restricted `dev`/`test` service controller, see [world lifecycle setup](lifecycle/README.md).
+
 The development setup uses Luanti 5.17.0 with LuaJIT and Minetest Game:
 
 - Shared mod and standalone Git repository: `/home/ben/.minetest/mods/civicrm_bridge`
