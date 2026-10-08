@@ -1,5 +1,7 @@
 # CiviCRM Bridge
 
+See [GitHub code archiving](tools/ARCHIVING.md) for repository credentials and checks before pushing.
+
 A small Luanti mod for local JSON account imports. This first version uses fictitious participants, the existing Luanti authentication API, and a filesystem inbox. It creates accounts, synchronizes roles and admission, and writes JSON results while the server runs. It does not connect to CiviCRM yet.
 
 ## Installation
