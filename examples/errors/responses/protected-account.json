@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "job_id": "demo-error-protected",
+  "status": "error",
+  "accounts": [
+    {
+      "username": "ben",
+      "status": "rejected",
+      "code": "protected_account"
+    }
+  ]
+}

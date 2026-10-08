@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "state": "running",
+  "world_id": "test",
+  "selected_world_id": "test",
+  "active": true,
+  "ready": true,
+  "pid": 4243,
+  "operation": "start_world",
+  "changed": true
+}

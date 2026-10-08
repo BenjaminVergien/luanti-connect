@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "job_id": "civi-world-003-start-dev",
+  "operation": "start_world",
+  "world_id": "dev"
+}

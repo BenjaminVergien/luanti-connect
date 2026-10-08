@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "error": {
+    "code": "switch_failed",
+    "message": "Target startup failed; inspect rollback outcome before retrying.",
+    "details": {
+      "cause": "startup_timeout",
+      "rollback": "restored",
+      "previous_world_id": "dev"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "job_id": "demo-001-create",
+  "operation": "sync_accounts",
+  "accounts": [
+    {
+      "username": "demo_player",
+      "role": "facilitator",
+      "admitted": true
+    }
+  ]
+}

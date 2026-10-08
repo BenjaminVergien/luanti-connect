@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "job_id": "demo-003-withdraw",
+  "status": "ok",
+  "accounts": [
+    {
+      "username": "demo_player",
+      "status": "updated"
+    }
+  ]
+}

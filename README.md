@@ -2,6 +2,8 @@
 
 See [GitHub code archiving](tools/ARCHIVING.md) for repository credentials and checks before pushing.
 
+For the later CiviCRM component, start with the [integration contract](docs/INTEGRATION.md) and [request/response example catalog](examples/README.md). They distinguish implemented account JSON, implemented world-control commands, and proposed adapter JSON.
+
 A small Luanti mod for local JSON account imports. This first version uses fictitious participants, the existing Luanti authentication API, and a filesystem inbox. It creates accounts, synchronizes roles and admission, and writes JSON results while the server runs. It does not connect to CiviCRM yet.
 
 ## Installation
@@ -26,7 +28,7 @@ From the existing **ben** session, load the mod with:
 sudo systemctl restart luanti-dev.service
 ```
 
-The developer account needs no sudo rights. Later imports require no restart. This mod enables a strict admission whitelist: existing accounts other than the configured administrator need a bridge-managed admission record before they can join. Do not enable it on a different world without accounting for that behavior.
+Account imports require no sudo rights or restart. The separately installed world controller grants the developer account only its exact lifecycle commands. This mod enables a strict admission whitelist: existing accounts other than the configured administrator need a bridge-managed admission record before they can join. Do not enable it on a different world without accounting for that behavior.
 
 ## Local demonstration
 
@@ -39,7 +41,7 @@ python3 tools/simulate.py examples/03-withdraw.json
 python3 tools/simulate.py examples/04-readmit.json
 ```
 
-Every example identity and password is fictitious. Use these only in the development world. After the first job, `demo_player` can log in using the example password. Change that password in the client, then rerun the creation job with a fresh ID to verify that imports preserve the new password:
+Every example identity and password is fictitious. Prefer an isolated or dedicated test world and pass its runtime directory with `--runtime-dir`; the commands above default to the development world. After the first job, `demo_player` can log in using the example password. Change that password in the client, then rerun the creation job with a fresh ID to verify that imports preserve the new password:
 
 ```bash
 python3 tools/simulate.py --job-id demo-password-preserved examples/01-create.json
@@ -97,10 +99,12 @@ Run the isolated engine integration checks on the server:
 
 ```bash
 python3 tests/run_integration.py
+python3 tests/run_examples.py
+python3 tests/run_lifecycle.py
 ```
 
-The tests use a temporary world, an isolated user home with a shared mod installation, and a loopback-only port. Also check login, role updates, withdrawal, and readmission with a real client in the development world.
+The engine tests use disposable worlds, isolated user homes with a shared mod installation, and loopback-only ports. The example checks compare the published account response fixtures to real engine results and lifecycle response fixtures to the controller with a fake service. The lifecycle suite separately checks real process transitions and systemd safety fixtures. They do not control the live development service. Also check login, role updates, withdrawal, and readmission with a real client in the development world.
 
-Version only this mod directory. Keep the surrounding world, authentication databases, mod storage, inbox, outbox, and real credentials out of Git. There is no Git remote or automatic push. To stop enforcing the bridge whitelist, disable the mod in `world.mt` and restart the service; account and privilege changes already applied remain in the world.
+Version only this mod directory. Keep the surrounding world, authentication databases, mod storage, inbox, outbox, and real credentials out of Git. The private archive is [Stewie23/civicrm_bridge](https://github.com/Stewie23/civicrm_bridge); pushes use a repository-specific deploy key and the secret-scan hook described in [archiving](tools/ARCHIVING.md). There is no automatic scheduled push. To stop enforcing the bridge whitelist, disable the mod in `world.mt` and restart the service; account and privilege changes already applied remain in the world.
 
 The existing mod directory remains owned by `ben`. From that directory, the dedicated SSH account can use `git -c safe.directory="$PWD" status` (and the same prefix for other Git commands). This trusts only this repository for that invocation and leaves global Git settings unchanged.

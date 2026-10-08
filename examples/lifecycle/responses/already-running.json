@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "already_running",
+    "message": "A different world is running; use switch_world.",
+    "details": {}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "state": "unmanaged",
+  "world_id": null,
+  "selected_world_id": "dev",
+  "active": true,
+  "ready": false,
+  "pid": 4244
+}

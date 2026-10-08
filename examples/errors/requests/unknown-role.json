@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "job_id": "demo-error-unknown-role",
+  "operation": "sync_accounts",
+  "accounts": [
+    {
+      "username": "demo_player",
+      "role": "owner",
+      "admitted": true
+    }
+  ]
+}

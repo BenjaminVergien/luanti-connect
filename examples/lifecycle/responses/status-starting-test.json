@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "state": "starting",
+  "world_id": "test",
+  "selected_world_id": "test",
+  "active": true,
+  "ready": false,
+  "pid": 4243
+}

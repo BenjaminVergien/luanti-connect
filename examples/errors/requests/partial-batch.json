@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "job_id": "demo-error-partial",
+  "operation": "sync_accounts",
+  "accounts": [
+    {
+      "username": "local_account",
+      "initial_password": "DemoOnly-MustNotReplace!",
+      "role": "participant",
+      "admitted": true
+    },
+    {
+      "username": "demo_partial",
+      "initial_password": "DemoOnly-Partial!",
+      "role": "participant",
+      "admitted": true
+    }
+  ]
+}
