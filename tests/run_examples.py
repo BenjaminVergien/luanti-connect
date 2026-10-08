@@ -110,8 +110,9 @@ def check_lifecycle_examples():
                   'game_id': 'minetest', 'engine': '/usr/bin/true',
                   'user_home': str(base / 'home'), 'server_config': str(config_file)}
         for path in config['worlds'].values():
-            Path(path).mkdir()
+            Path(path).mkdir(mode=0o700)
             (Path(path) / 'world.mt').write_text('gameid = minetest\nload_mod_civicrm_bridge = mods/civicrm_bridge\n')
+            (Path(path) / 'world.mt').chmod(0o600)
         selection, lock = base / 'selection.json', base / 'operation.lock'
         examples = ROOT / 'examples/lifecycle'
 
@@ -161,7 +162,7 @@ def check_lifecycle_examples():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--engine', default=shutil.which('luanti') or shutil.which('minetest'))
-    parser.add_argument('--base', type=Path, default=Path('/home/ben/luanti-dev'))
+    parser.add_argument('--base', type=Path, default=Path.home())
     parser.add_argument('--game-path', type=Path, default=Path('/home/ben/.minetest/games/minetest_game'))
     args = parser.parse_args()
     if not args.engine:

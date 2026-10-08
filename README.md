@@ -20,7 +20,7 @@ The development setup uses Luanti 5.17.0 with LuaJIT and Minetest Game:
 
 Enable `load_mod_civicrm_bridge = mods/civicrm_bridge` in each selected world's `world.mt`. The shared mod directory belongs to the operating-system user running Luanti (`ben` here); other service users need their own installation or a configured shared content path. Keep one source copy: do not also place this mod in a world's `worldmods` directory.
 
-Each world keeps its own authentication records, bridge mod storage, and runtime inbox/outbox. The mod derives its runtime directory from `core.get_worldpath()`; worlds do not share account or admission state. Precreate each runtime directory and its `inbox`, `outbox`, and `receipts` children with inherited read/write access for the service user and the intended integration/developer account. Both accounts need directory traversal and file creation/deletion access. Keep runtime files accessible only to the intended local accounts: pending inputs contain initial passwords.
+Each world keeps its own authentication records, bridge mod storage, and runtime inbox/outbox. The mod derives its runtime directory from `core.get_worldpath()`; worlds do not share account or admission state. Use the reviewed lifecycle installer to protect the world and runtime parent directories. Grant the integration account write access only to the `inbox`, traversal to that inbox, and read-only access to `outbox` results; receipts and the checkpoint remain service-private. The service user needs read/write access throughout its runtime. Existing broad inherited write ACLs must be removed from world settings, databases, receipts, and runtime parents. Keep pending input files private: they contain initial passwords. The shared source checkout remains trusted developer code; see the [lifecycle trust boundary](lifecycle/README.md#trust-boundary-and-upgrades).
 
 From the existing **ben** session, load the mod with:
 
@@ -101,6 +101,7 @@ Run the isolated engine integration checks on the server:
 python3 tests/run_integration.py
 python3 tests/run_examples.py
 python3 tests/run_lifecycle.py
+python3 tests/run_world_security.py
 python3 tests/run_world_worker.py
 ```
 

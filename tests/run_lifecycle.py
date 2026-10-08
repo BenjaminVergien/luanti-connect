@@ -134,19 +134,25 @@ def create_fixture(base, engine, game):
     mods = home / ".minetest" / "mods"
     mods.mkdir()
     (mods / "civicrm_bridge").symlink_to(ROOT, target_is_directory=True)
+    driver = mods / "bridge_test_driver"
+    driver.mkdir()
+    (driver / "mod.conf").write_text("name = bridge_test_driver\ndepends = civicrm_bridge\n")
+    shutil.copyfile(ROOT / "tests" / "driver.lua", driver / "init.lua")
     worlds = {}
     for name in ("dev", "test"):
         world = artifacts / name
-        driver = world / "worldmods" / "bridge_test_driver"
-        driver.mkdir(parents=True)
-        (driver / "mod.conf").write_text("name = bridge_test_driver\ndepends = civicrm_bridge\n")
-        shutil.copyfile(ROOT / "tests" / "driver.lua", driver / "init.lua")
+        (world / "worldmods").mkdir(parents=True)
+        world.chmod(0o700)
+        (world / "worldmods").chmod(0o700)
+        # The SSH account uses a group-writable umask. Keep both initial and
+        # engine-rewritten executable settings private to the fixture owner.
+        subprocess.run(["/usr/bin/setfacl", "-d", "-m", "u::rwx,g::---,o::---", str(world)], check=True)
         (world / "test-control").mkdir()
         (world / "world.mt").write_text(
             "gameid = minetest\nbackend = sqlite3\nplayer_backend = sqlite3\n"
             "auth_backend = sqlite3\nmod_storage_backend = sqlite3\n"
             "load_mod_civicrm_bridge = mods/civicrm_bridge\n"
-            "load_mod_bridge_test_driver = true\n"
+            "load_mod_bridge_test_driver = mods/bridge_test_driver\n"
         )
         worlds[name] = str(world)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -245,12 +251,12 @@ def run_real(config, state, lock, backend):
     finally:
         duplicate_mod.unlink()
 
-    # Valid configuration, but the engine fails loading the target's mods.
-    broken = Path(config["worlds"]["test"]) / "worldmods" / "broken_dependency"
+    # A trusted shared test mod fails loading, exercising startup rollback.
+    broken = Path(config["user_home"]) / ".minetest" / "mods" / "broken_dependency"
     broken.mkdir()
     (broken / "mod.conf").write_text("name = broken_dependency\ndepends = lifecycle_missing_dependency\n")
     (broken / "init.lua").write_text("-- Dependency failure intentionally prevents startup.\n")
-    test_mt.write_text(original + "load_mod_broken_dependency = true\n")
+    test_mt.write_text(original + "load_mod_broken_dependency = mods/broken_dependency\n")
     before_starts = backend.starts
     try:
         expect_failure(lambda: controller.switch_world("test"), "target failed to start")
@@ -446,7 +452,7 @@ def run_fifo_fixture(config, state, lock):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", default=shutil.which("luanti") or "/usr/bin/luanti")
-    parser.add_argument("--base", type=Path, default=Path("/home/ben/luanti-dev"))
+    parser.add_argument("--base", type=Path, default=Path.home())
     parser.add_argument("--game-path", type=Path, default=Path("/home/ben/.minetest/games/minetest_game"))
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--mock-only", action="store_true", help="Run controller/systemd regression fixtures without starting Luanti")

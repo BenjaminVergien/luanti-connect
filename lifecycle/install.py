@@ -115,69 +115,138 @@ def expected_service(reinstall):
                 raise RuntimeError("Running process does not target the dev world")
 
 
-def prepare_worlds():
-    """Prepare only held directories beneath the exact development tree.
+def prepare_worlds(base_path=Path("/home/ben/luanti-dev"), owner=None, developer=None):
+    """Remove legacy developer writes, using only held no-follow descriptors.
 
-    No privileged chmod/chown/ACL operation resolves a writable pathname.
-    Existing directories retain ownership, including developer-created ones.
+    The only integration write boundary is civicrm_bridge/inbox. Existing
+    developer-owned world objects become service-owned so chmod cannot undo it.
     """
-    owner = pwd.getpwnam("ben")
-    developer = pwd.getpwnam("codex_civicrmbridge")
-    approved_owners = {owner.pw_uid, developer.pw_uid}
-    acl = "u::rwx,u:ben:rwx,u:codex_civicrmbridge:rwx,g::---,m::rwx,o::---"
-    default_acl = ",".join("d:" + entry for entry in acl.split(","))
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    owner = owner or pwd.getpwnam("ben")
+    developer = developer or pwd.getpwnam("codex_civicrmbridge")
+    approved_owners = {0, owner.pw_uid, developer.pw_uid}
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     held = []
 
     def hold(descriptor):
         held.append(descriptor)
         return descriptor
 
-    def child(parent, name, create=False, private=False):
-        created = False
+    def child(parent, name, create=False):
         if create:
             try:
                 os.mkdir(name, 0o700, dir_fd=parent)
-                created = True
             except FileExistsError:
                 pass
-        descriptor = hold(os.open(name, directory_flags, dir_fd=parent))
+        return hold(os.open(name, flags | os.O_DIRECTORY, dir_fd=parent))
+
+    def inspect(descriptor):
         info = os.fstat(descriptor)
-        if created:
-            # A replacement created by a writable-directory owner is rejected
-            # before changing ownership; newly created directories belong to root.
-            if info.st_uid != 0:
-                raise RuntimeError(f"New directory was replaced during preparation: {name}")
-            os.fchown(descriptor, owner.pw_uid, owner.pw_gid)
-        elif info.st_uid not in approved_owners:
-            raise RuntimeError(f"Expected directory owned by ben or codex_civicrmbridge: {name}")
-        if private:
-            subprocess.run(
-                ["/usr/bin/setfacl", "--set=" + acl + "," + default_acl,
-                 f"/proc/self/fd/{descriptor}"],
-                check=True, text=True, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, env=ENV, pass_fds=(descriptor,))
-        return descriptor
+        if info.st_uid not in approved_owners:
+            raise RuntimeError("Unexpected world object owner")
+        if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+            raise RuntimeError("World objects must be regular files or directories")
+        if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+            raise RuntimeError("Refusing hard-linked world file")
+        return info
+
+    def inspect_tree(descriptor):
+        inspect(descriptor)
+        for name in os.listdir(descriptor):
+            try:
+                entry = os.open(name, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                # The running service can finish an atomic write or remove a
+                # consumed inbox file while the installer inspects the tree.
+                continue
+            try:
+                info = inspect(entry)
+                if stat.S_ISDIR(info.st_mode):
+                    inspect_tree(entry)
+            finally:
+                os.close(entry)
+
+    def secure(descriptor, permission="---", directory=False, inbox=False):
+        info = inspect(descriptor)
+        if directory != stat.S_ISDIR(info.st_mode):
+            raise RuntimeError("Unexpected world object type")
+        os.fchown(descriptor, owner.pw_uid, owner.pw_gid)
+        own = "rwx" if directory else "rw-"
+        acl = f"u::{own},u:{developer.pw_uid}:{permission},g::---,m::{permission},o::---"
+        if inbox:
+            # Submitted files belong to their publisher; inherit service access.
+            acl = f"u::{own},u:{owner.pw_uid}:{own},u:{developer.pw_uid}:{own},g::---,m::{own},o::---"
+        if directory:
+            acl += "," + ",".join("d:" + entry for entry in acl.split(","))
+        subprocess.run(["/usr/bin/setfacl", "--set=" + acl, f"/proc/self/fd/{descriptor}"],
+                       check=True, text=True, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, env=ENV, pass_fds=(descriptor,))
+
+    def secure_tree(descriptor, relative=()):
+        info = inspect(descriptor)
+        directory = stat.S_ISDIR(info.st_mode)
+        inbox = relative[:2] == ("civicrm_bridge", "inbox")
+        results = relative[:2] == ("civicrm_bridge", "outbox")
+        permission = ("r-x" if directory else "r--") if results else "---"
+        if directory and relative in ((), ("civicrm_bridge",)):
+            permission = "--x"
+        secure(descriptor, permission, directory, inbox)
+        if directory:
+            for name in os.listdir(descriptor):
+                try:
+                    entry = os.open(name, flags, dir_fd=descriptor)
+                except FileNotFoundError:
+                    continue
+                try:
+                    secure_tree(entry, relative + (name,))
+                finally:
+                    os.close(entry)
 
     try:
-        base = hold(os.open("/", directory_flags))
-        for component in ("home", "ben", "luanti-dev"):
-            base = hold(os.open(component, directory_flags, dir_fd=base))
-            if os.fstat(base).st_uid not in ({0} | approved_owners):
+        if not base_path.is_absolute() or base_path.resolve() != base_path:
+            raise RuntimeError("Development tree must use an absolute, non-symlink path")
+        base = hold(os.open("/", flags | os.O_DIRECTORY))
+        for index, component in enumerate(base_path.parts[1:]):
+            base = child(base, component)
+            if os.fstat(base).st_uid not in {0, owner.pw_uid} and index < len(base_path.parts) - 2:
                 raise RuntimeError("Unexpected owner in development directory ancestry")
         dev = child(base, "world")
-        worlds = child(base, "worlds", create=True, private=True)
-        test = child(worlds, "test", create=True, private=True)
+        # Preflight existing objects before removing any legacy grants.
+        inspect_tree(dev)
+        worlds = child(base, "worlds", create=True)
+        test = child(worlds, "test", create=True)
+        inspect_tree(test)
+        for world in (dev, test):
+            try:
+                mods = os.open("worldmods", flags | os.O_DIRECTORY, dir_fd=world)
+            except FileNotFoundError:
+                pass
+            else:
+                try:
+                    if os.listdir(mods):
+                        raise RuntimeError("Remove or review world-local mods before installation")
+                finally:
+                    os.close(mods)
+        # Revoke replacement/creation access before touching world children.
+        secure(base, "--x", directory=True)
+        for parent, name, descriptor in ((base, "world", dev), (base, "worlds", worlds)):
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            opened = os.fstat(descriptor)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise RuntimeError("World directory changed during permission preparation")
+        secure(worlds, "--x", directory=True)
+        current = os.stat("test", dir_fd=worlds, follow_symlinks=False)
+        opened = os.fstat(test)
+        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+            raise RuntimeError("Test directory changed during permission preparation")
+        for world in (dev, test):
+            secure(world, "--x", directory=True)
         try:
             descriptor = os.open("world.mt", os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                                 os.O_NOFOLLOW | os.O_CLOEXEC, 0o660, dir_fd=test)
+                                 os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=test)
         except FileExistsError:
-            descriptor = os.open("world.mt", os.O_RDONLY | os.O_NOFOLLOW |
-                                 os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=test)
+            descriptor = os.open("world.mt", flags, dir_fd=test)
             with os.fdopen(descriptor, "rb") as existing:
-                info = os.fstat(existing.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_uid not in approved_owners:
-                    raise RuntimeError("Existing world.mt must be a regular file owned by an approved account")
+                inspect(existing.fileno())
                 raw = existing.read(65537)
                 if len(raw) > 65536:
                     raise RuntimeError("Existing world.mt exceeds 64 KiB")
@@ -193,11 +262,22 @@ def prepare_worlds():
                              "load_mod_civicrm_bridge = mods/civicrm_bridge\n")
                 output.flush()
                 os.fsync(output.fileno())
-                os.fchown(output.fileno(), owner.pw_uid, owner.pw_gid)
         for world in (dev, test):
-            runtime = child(world, "civicrm_bridge", create=True, private=True)
+            runtime = child(world, "civicrm_bridge", create=True)
             for name in ("inbox", "outbox", "receipts"):
-                child(runtime, name, create=True, private=True)
+                child(runtime, name, create=True)
+            secure_tree(world)
+        for name in ("server.conf", "server.log"):
+            try:
+                entry = os.open(name, flags, dir_fd=base)
+            except FileNotFoundError:
+                if name == "server.conf":
+                    raise
+                continue
+            try:
+                secure(entry, "r--" if name == "server.log" else "---")
+            finally:
+                os.close(entry)
     finally:
         for descriptor in reversed(held):
             os.close(descriptor)
@@ -215,7 +295,7 @@ def main():
         raise RuntimeError("Expected a root-owned lifecycle lock file")
     # Held until this standalone installer exits, serializing with worldctl.
     fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-    for required in ("/usr/sbin/visudo", "/usr/bin/setfacl", "/usr/bin/luanti", "/usr/bin/python3"):
+    for required in ("/usr/sbin/visudo", "/usr/bin/setfacl", "/usr/bin/getfacl", "/usr/bin/luanti", "/usr/bin/python3"):
         if not Path(required).is_file():
             raise RuntimeError(f"Required executable not found: {required}")
     source = Path(__file__).resolve().parent
@@ -258,11 +338,22 @@ def main():
         candidate.write_bytes(files[SUDOERS][0])
         candidate.chmod(0o440)
         run("/usr/sbin/visudo", "-cf", str(candidate))
-    prepare_worlds()
     for directory in (LIB, CONFIG.parent, STATE.parent, WRAPPER.parent, DROPIN.parent, SUDOERS.parent):
         root_directory(directory)
     backups = STATE.parent / ("backup-" + time.strftime("%Y%m%dT%H%M%S") + "-" + str(os.getpid()))
     backups.mkdir(mode=0o700)
+    # Permission repairs intentionally remain restrictive on managed-file failure;
+    # retain the previous ACLs for administrator-directed recovery, never reopen
+    # the vulnerable world automatically.
+    base = Path("/home/ben/luanti-dev")
+    ancestors = [base, base / "worlds", Path(CONFIGURATION["server_config"]),
+                 Path(CONFIGURATION["logfile"])]
+    permissions = run("/usr/bin/getfacl", "-p", *[str(p) for p in ancestors if p.exists()])
+    for world in CONFIGURATION["worlds"].values():
+        if Path(world).exists():
+            permissions += "\n\n" + run("/usr/bin/getfacl", "-R", "-P", "-p", world)
+    atomic_write(backups / "permissions.acl", (permissions + "\n").encode(), 0o600)
+    prepare_worlds()
     originals = {}
     for path in files:
         originals[path] = (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)) if path.exists() else None

@@ -299,7 +299,7 @@ def run(h):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", default=shutil.which("luanti") or shutil.which("minetest") or shutil.which("minetestserver"))
-    parser.add_argument("--base", type=Path, default=Path("/home/ben/luanti-dev"), help="Parent for the disposable test directory")
+    parser.add_argument("--base", type=Path, default=Path.home(), help="Parent for the disposable test directory")
     parser.add_argument("--game-path", type=Path, default=Path("/home/ben/.minetest/games/minetest_game"), help="Installed Minetest Game directory (or its parent)")
     parser.add_argument("--keep", action="store_true", help="Retain test world even on success")
     args = parser.parse_args()

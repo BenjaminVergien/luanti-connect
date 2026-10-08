@@ -1,11 +1,13 @@
 """Manage one Luanti service using administrator-configured world IDs."""
 from contextlib import contextmanager
+import errno
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 import tempfile
 import time
@@ -17,6 +19,52 @@ class LifecycleError(Exception):
         self.code = code
         self.message = message
         self.details = details or {}
+
+
+def check_trusted_permissions(descriptor, trusted_uids, allow_sticky=False):
+    """Check effective Linux ACL writes, not just the ACL mask in st_mode."""
+    metadata = os.fstat(descriptor)
+    if metadata.st_uid not in trusted_uids:
+        raise LifecycleError("invalid_world", "World paths must be owned by root or the service user.")
+    # A root-owned sticky temporary directory cannot replace another user's
+    # existing child. Only ancestors, never the world itself, get this exception.
+    if allow_sticky and metadata.st_uid == 0 and metadata.st_mode & stat.S_ISVTX:
+        return
+    for attribute in ("system.posix_acl_access", "system.posix_acl_default"):
+        try:
+            raw = os.getxattr(descriptor, attribute)
+        except OSError as error:
+            if error.errno not in (errno.ENODATA, errno.ENOTSUP):
+                raise
+            if attribute.endswith("access") and metadata.st_mode & 0o022:
+                raise LifecycleError("invalid_world", "World paths cannot be writable by other users.")
+            continue
+        if len(raw) < 4 or struct.unpack_from("<I", raw)[0] != 2 or (len(raw) - 4) % 8:
+            raise LifecycleError("invalid_world", "World path has an invalid filesystem ACL.")
+        entries = list(struct.iter_unpack("<HHI", raw[4:]))
+        mask = next((permissions for tag, permissions, _ in entries if tag == 16), 7)
+        for tag, permissions, identity in entries:
+            effective = permissions & mask if tag in (2, 4, 8) else permissions
+            if effective & 2 and (tag in (4, 8, 32) or (tag == 2 and identity not in trusted_uids)):
+                raise LifecycleError("invalid_world", "World path ACL grants write access to another user.")
+
+
+@contextmanager
+def trusted_world_directory(path, trusted_uids):
+    """Hold a no-follow world descriptor after checking every ancestor."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    descriptor = os.open("/", flags)
+    try:
+        check_trusted_permissions(descriptor, trusted_uids, allow_sticky=True)
+        for index, component in enumerate(path.parts[1:]):
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            check_trusted_permissions(descriptor, trusted_uids,
+                                      allow_sticky=index < len(path.parts) - 2)
+        yield descriptor
+    finally:
+        os.close(descriptor)
 
 
 def load_json(path):
@@ -195,12 +243,28 @@ class LifecycleController:
             raise LifecycleError("invalid_world", "Configured world directory is missing or uses a symlink.")
         try:
             settings = {}
-            descriptor = os.open(path / "world.mt", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(descriptor) as stream:
-                metadata = os.fstat(stream.fileno())
-                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 65536:
-                    raise LifecycleError("invalid_world", "World settings must be a regular file of at most 64 KiB.")
-                contents = stream.read(65537)
+            trusted_uids = {0, Path(self.config["user_home"]).stat().st_uid}
+            with trusted_world_directory(path, trusted_uids) as world:
+                try:
+                    mods = os.open("worldmods", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                   dir_fd=world)
+                except FileNotFoundError:
+                    pass
+                else:
+                    try:
+                        check_trusted_permissions(mods, trusted_uids)
+                        if os.listdir(mods):
+                            raise LifecycleError("invalid_world", "World-local mods are not permitted.")
+                    finally:
+                        os.close(mods)
+                descriptor = os.open("world.mt", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=world)
+                with os.fdopen(descriptor) as stream:
+                    metadata = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 65536:
+                        raise LifecycleError("invalid_world", "World settings must be a regular file of at most 64 KiB.")
+                    check_trusted_permissions(stream.fileno(), trusted_uids)
+                    contents = stream.read(65537)
             if len(contents) > 65536:
                 raise LifecycleError("invalid_world", "World settings exceed the size limit.")
             for line in contents.splitlines():
@@ -217,8 +281,6 @@ class LifecycleController:
             raise LifecycleError("invalid_world", "World uses a different game.")
         if settings.get("load_mod_civicrm_bridge") != "mods/civicrm_bridge":
             raise LifecycleError("invalid_world", "World must explicitly enable the shared bridge.")
-        if (path / "worldmods" / "civicrm_bridge").exists():
-            raise LifecycleError("invalid_world", "World contains a duplicate bridge mod.")
         shared = Path(self.config["user_home"]) / ".minetest" / "mods" / "civicrm_bridge"
         if not (shared / "mod.conf").is_file() or not Path(self.config["server_config"]).is_file():
             raise LifecycleError("invalid_world", "Shared bridge or server configuration is missing.")
