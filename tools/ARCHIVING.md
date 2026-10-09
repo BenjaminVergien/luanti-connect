@@ -1,6 +1,6 @@
 # GitHub code archive
 
-The archive is the private repository `Stewie23/civicrm_bridge`. Preserve commit history with ordinary pushes to `main`; do not force-push or mirror unrelated refs. Only code, documentation, tests and fictitious examples belong in it. World accounts, passwords, configuration, databases and bridge runtime files remain outside the checkout.
+The archive is the private repository `Stewie23/luanti-connect`. Preserve commit history with ordinary pushes to `main`; do not force-push or mirror unrelated refs. Only code, documentation, tests and fictitious examples belong in it. World accounts, passwords, configuration, databases and bridge runtime files remain outside the checkout.
 
 The development account uses a separate repository-specific write deploy key. Its private file and pinned GitHub host key live under `/home/codex_civicrmbridge/.ssh`, outside Git. The SSH command is configured only in this checkout's Git configuration. It disables agent forwarding and other identities, requires the pinned host key, and uses no password or personal access token. Never display or copy the private key. Revoke this deploy key in GitHub when retiring the development server. Provisioned runtime servers should use separate read-only access.
 
