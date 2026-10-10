@@ -30,6 +30,13 @@ sudo systemctl restart luanti-dev.service
 
 Account imports require no sudo rights or restart. The separately installed world controller grants the developer account only its exact lifecycle commands. This mod enables a strict admission whitelist: existing accounts other than the configured administrator need a bridge-managed admission record before they can join. Do not enable it on a different world without accounting for that behavior.
 
+## HTTPS API
+
+For backend-to-server communication, use the bearer-authenticated API for account
+imports and world lifecycle jobs. Follow [manual server setup and backend examples](docs/HTTPS_API.md).
+It uses the existing reverse proxy, one backend token and a separate unprivileged
+service identity. Configuration preparation does not install or change services.
+
 ## Local demonstration
 
 From the mod directory, run these jobs in order with Python 3:

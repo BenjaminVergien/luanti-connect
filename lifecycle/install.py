@@ -115,7 +115,7 @@ def expected_service(reinstall):
                 raise RuntimeError("Running process does not target the dev world")
 
 
-def prepare_worlds(base_path=Path("/home/ben/luanti-dev"), owner=None, developer=None):
+def prepare_worlds(base_path=Path("/home/ben/luanti-dev"), owner=None, developer=None, api_user=None):
     """Remove legacy developer writes, using only held no-follow descriptors.
 
     The only integration write boundary is civicrm_bridge/inbox. Existing
@@ -123,7 +123,15 @@ def prepare_worlds(base_path=Path("/home/ben/luanti-dev"), owner=None, developer
     """
     owner = owner or pwd.getpwnam("ben")
     developer = developer or pwd.getpwnam("codex_civicrmbridge")
-    approved_owners = {0, owner.pw_uid, developer.pw_uid}
+    if api_user is None:
+        try:
+            api_user = pwd.getpwnam("civicrm_bridge_api")
+        except KeyError:
+            pass
+    publishers = {developer.pw_uid}
+    if api_user is not None:
+        publishers.add(api_user.pw_uid)
+    approved_owners = {0, owner.pw_uid, *publishers}
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     held = []
 
@@ -165,16 +173,21 @@ def prepare_worlds(base_path=Path("/home/ben/luanti-dev"), owner=None, developer
             finally:
                 os.close(entry)
 
-    def secure(descriptor, permission="---", directory=False, inbox=False):
+    def secure(descriptor, permission="---", directory=False, inbox=False, api_permission=None):
         info = inspect(descriptor)
         if directory != stat.S_ISDIR(info.st_mode):
             raise RuntimeError("Unexpected world object type")
         os.fchown(descriptor, owner.pw_uid, owner.pw_gid)
         own = "rwx" if directory else "rw-"
-        acl = f"u::{own},u:{developer.pw_uid}:{permission},g::---,m::{permission},o::---"
+        permissions = {uid: permission for uid in publishers}
+        if api_user is not None and api_permission is not None:
+            permissions[api_user.pw_uid] = api_permission
+        grants = ",".join(f"u:{uid}:{permissions[uid]}" for uid in sorted(publishers))
+        acl = f"u::{own},{grants},g::---,m::{permission},o::---"
         if inbox:
             # Submitted files belong to their publisher; inherit service access.
-            acl = f"u::{own},u:{owner.pw_uid}:{own},u:{developer.pw_uid}:{own},g::---,m::{own},o::---"
+            grants = ",".join(f"u:{uid}:{own}" for uid in sorted(publishers | {owner.pw_uid}))
+            acl = f"u::{own},{grants},g::---,m::{own},o::---"
         if directory:
             acl += "," + ",".join("d:" + entry for entry in acl.split(","))
         subprocess.run(["/usr/bin/setfacl", "--set=" + acl, f"/proc/self/fd/{descriptor}"],
@@ -275,7 +288,7 @@ def prepare_worlds(base_path=Path("/home/ben/luanti-dev"), owner=None, developer
                     raise
                 continue
             try:
-                secure(entry, "r--" if name == "server.log" else "---")
+                secure(entry, "r--" if name == "server.log" else "---", api_permission="---")
             finally:
                 os.close(entry)
     finally:

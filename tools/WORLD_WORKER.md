@@ -11,7 +11,10 @@ python3 tools/world_worker.py examples/lifecycle/proposed-requests/status.json
 The `proposed-requests/` path is retained for existing links; these six files are
 now accepted worker inputs. The root controller still accepts CLI arguments only.
 Never publish these requests to a world's account inbox or use `tools/simulate.py`.
-There is no HTTP endpoint, CiviCRM extension, or background queue consumer.
+The optional [HTTPS API](../docs/HTTPS_API.md) wraps this worker with authentication,
+durable acceptance and a background queue. Its installed service uses a separate
+account and receipt directory. The CLI itself remains a single-request tool;
+there is no CiviCRM extension.
 
 Supply one UTF-8 JSON file, or `-` (the default) to read one request from stdin.
 The maximum size is 16 KiB. Duplicate keys and unknown fields are rejected.

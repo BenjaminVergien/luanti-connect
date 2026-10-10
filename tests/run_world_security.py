@@ -193,6 +193,23 @@ class WorldSecurityTests(unittest.TestCase):
         self.assertFalse(self.settings.stat().st_mode & 0o022)
         self.assertNotIn("bridge_test_driver", self.settings.read_text())
 
+    def test_api_account_has_only_inbox_and_result_access(self):
+        runtime = self.installer_fixture()
+        api_user = pwd.getpwnam("daemon")
+        (self.artifacts / "server.log").write_text("disposable fixture\n")
+        prepare_worlds(self.artifacts, pwd.getpwuid(os.getuid()), self.outsider, api_user)
+        def acl(path):
+            return subprocess.check_output(["getfacl", "-cpn", str(path)], text=True)
+        uid = api_user.pw_uid
+        self.assertIn(f"user:{uid}:rwx", acl(runtime / "inbox"))
+        self.assertIn(f"default:user:{uid}:rwx", acl(runtime / "inbox"))
+        self.assertIn(f"user:{uid}:r--", acl(runtime / "outbox" / "fixture.json"))
+        for path in (self.settings, runtime / "receipts" / "fixture.json",
+                     self.artifacts / "server.conf", self.artifacts / "server.log"):
+            self.assertIn(f"user:{uid}:---", acl(path))
+        self.assertIn(f"user:{uid}:--x", acl(self.world))
+        self.assertEqual(self.validate(), self.world)
+
     def test_installer_rejects_replaced_world_directory(self):
         self.installer_fixture()
         original_run = subprocess.run

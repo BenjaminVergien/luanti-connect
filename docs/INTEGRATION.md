@@ -1,6 +1,6 @@
 # Integration contract for the future CiviCRM component
 
-This describes the implemented prototype, not a public API or an implemented CiviCRM extension. See the [example catalog](../examples/README.md) for complete JSON files and expected results. All example accounts and passwords are fictitious.
+This describes the implemented account/lifecycle contracts, not an implemented CiviCRM extension. The authenticated [HTTPS API](HTTPS_API.md) wraps these contracts for a trusted backend; its manual setup uses the existing reverse proxy. See the [example catalog](../examples/README.md) for complete JSON files and expected results. All example accounts and passwords are fictitious.
 
 ## Available actions and transport
 
@@ -120,7 +120,7 @@ Use `ready: true` rather than successful process creation alone. On failure insp
 
 ## Design decisions for the CiviCRM component
 
-The local lifecycle worker exists; a CiviCRM component, account-delivery worker, and authenticated network transport still need implementation. The current mod trusts authorized local inbox writers and does not validate a shared password, signature, HTTP token or SSH identity inside JSON. Do not expose its inbox through an unauthenticated upload endpoint. Keep CiviCRM/GitHub/Hetzner credentials outside jobs, results and Git. A deployment key used to archive this code is separate from credentials used to submit bridge jobs.
+The local lifecycle worker and authenticated HTTPS transport exist; the CiviCRM component still needs implementation. The API validates its bearer token before accepting jobs and uses the existing local account/lifecycle interfaces. The mod itself trusts authorized local inbox writers and does not validate network credentials inside JSON. Keep CiviCRM/GitHub/Hetzner credentials outside jobs, results and Git. A deployment key used to archive this code is separate from credentials used to submit bridge jobs.
 
 Keep an external mapping from CiviCRM contact to stable Luanti username, scoped to the world. Display names and email changes should not rename Luanti accounts. Store CiviCRM contact/event/participation identifiers and audit/correlation metadata in the integration database; the mod does not store or return them. Avoid sending personal data that the mod does not need.
 
@@ -132,4 +132,4 @@ For dependent operations, start/switch the intended world, wait for readiness, p
 
 ## Not implemented
 
-Password reset, account deletion/rename, arbitrary privilege grants, individual kick commands, roster/account querying, CiviCRM event membership storage, authenticated network delivery, provisioning Hetzner servers, and world creation/cloning/deletion are not available operations. The installer prepares the existing `dev` and a fresh `test` world; this is not a runtime world-creation API. Do not invent request names for these in the CiviCRM component until corresponding handlers and contracts exist.
+Password reset, account deletion/rename, arbitrary privilege grants, individual kick commands, roster/account querying, CiviCRM event membership storage, provisioning Hetzner servers, and world creation/cloning/deletion are not available operations. The lifecycle installer prepares the existing `dev` and a fresh `test` world; this is not a runtime world-creation API. Do not invent request names for these in the CiviCRM component until corresponding handlers and contracts exist.

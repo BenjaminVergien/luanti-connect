@@ -29,6 +29,14 @@ The controller checks ownership and effective access/default ACLs along the enti
 
 Stop publishing imports during the installer upgrade so its existing-file migration sees stable files. The installer retains an ACL snapshot at `permissions.acl` in its root-only backup directory before repairing permissions. If later installation checks fail, restrictive ACL repairs remain in place; managed controller files are restored, but the installer never automatically reopens developer writes. An administrator can inspect the snapshot for targeted recovery. Restoring the old ACLs would also restore the reported vulnerability. Editing the checkout alone does not upgrade the root-owned installed controller; run the reviewed installer from the `ben` session after testing.
 
+## HTTPS API identity
+
+The optional [HTTPS API](../docs/HTTPS_API.md) runs as `civicrm_bridge_api`.
+When that account exists, the lifecycle installer preserves its traversal,
+inbox publication and read-only outbox ACLs, while denying world configuration,
+receipts, checkpoint and server-log access. API setup and its exact sudo grants
+are manual; the lifecycle installer does not install or start the API.
+
 ## Commands
 
 For validated JSON input, run the unprivileged [local lifecycle worker](../tools/WORLD_WORKER.md): `python3 tools/world_worker.py REQUEST.json`. It uses these existing restricted commands and requires no additional sudo grants or root installation. Its receipts live in the SSH account's private home state directory.
