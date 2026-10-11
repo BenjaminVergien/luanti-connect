@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from api.contract import ACCOUNT_MAX, LIFECYCLE_MAX, JOB_ID, validate_accounts, validate_lifecycle
 from api.jobs import Conflict, Jobs
 from api.security import authenticated
+from api.worlds import catalogue
 
 LOG = logging.getLogger('civicrm_bridge_api')
 
@@ -93,6 +94,14 @@ def create_app(config, runner=None, background=True):
             return error(404, 'unknown_job')
         value = await asyncio.to_thread(app.state.jobs.get, kind, world, job_id)
         return JSONResponse(value) if value else error(404, 'unknown_job')
+
+    @app.get('/v1/worlds')
+    async def list_worlds():
+        try:
+            value = await asyncio.to_thread(catalogue, config)
+        except (OSError, ValueError, TypeError):
+            return error(503, 'world_catalogue_unavailable')
+        return JSONResponse(value)
 
     @app.post('/v1/worlds/{world_id}/accounts/jobs')
     async def submit_accounts(world_id: str, request: Request):

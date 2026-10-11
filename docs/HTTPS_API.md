@@ -100,7 +100,7 @@ sudo install -d -o root -g root -m 0755 \
 sudo install -d -o civicrm_bridge_api -g civicrm_bridge_api -m 0700 \
   /var/lib/civicrm-bridge-api
 
-for file in __init__.py security.py contract.py tokens.py jobs.py app.py serve.py; do
+for file in __init__.py security.py contract.py tokens.py jobs.py worlds.py app.py serve.py; do
   sudo install -o root -g root -m 0644 "api/$file" \
     "/usr/local/lib/civicrm-bridge-api/api/$file"
 done
@@ -217,10 +217,20 @@ or query-string tokens.
 
 | Endpoint | Behavior |
 | --- | --- |
+| `GET /v1/worlds` | Existing saved maps from the configured world allowlist; independent of running/stopped status |
 | `POST /v1/worlds/{world_id}/accounts/jobs` | Account v1 JSON, world `dev` or `test` |
 | `GET /v1/worlds/{world_id}/accounts/jobs/{job_id}` | Account progress/result |
 | `POST /v1/lifecycle/jobs` | Lifecycle v1 JSON |
 | `GET /v1/lifecycle/jobs/{job_id}` | Lifecycle progress/result |
+
+The catalogue returns `{"version":1,"worlds":[{"world_id":"dev","name":"dev"},{"world_id":"test","name":"test"}]}`.
+It checks for each configured map's regular `world.mt` file without starting the
+engine or creating a job. Unconfigured directories and filesystem paths are
+never returned. Removed maps are omitted; an empty list is a valid catalogue.
+Inspection failures return `503` with `world_catalogue_unavailable`, rather than
+publishing a partial list. Backends should retain their previous catalogue on
+failed fetches. Display names initially use the configured IDs and may be
+customized in the portal.
 
 Use the account schema in [INTEGRATION.md](INTEGRATION.md#account-request-v1)
 and lifecycle examples in [the example catalog](../examples/lifecycle/README.md).
