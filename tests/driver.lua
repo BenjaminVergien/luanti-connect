@@ -3,7 +3,30 @@ local directory = core.get_worldpath() .. "/test-control"
 core.mkdir(directory)
 local original_get_player = core.get_player_by_name
 local original_kick = core.kick_player
+local original_connected = core.get_connected_players
+local original_time = os.time
 local online, kicks = {}, {}
+
+-- Mock connected players only while the bridge runs; game mods expect full PlayerRefs.
+for index, callback in ipairs(core.registered_globalsteps) do
+	local origin = core.callback_origins[callback]
+	if origin.mod == "civicrm_bridge" then
+		local wrapped = function(dtime)
+			core.get_connected_players = function()
+				local players = original_connected()
+				for player_name in pairs(online) do
+					players[#players + 1] = core.get_player_by_name(player_name)
+				end
+				return players
+			end
+			local ok, reason = pcall(callback, dtime)
+			core.get_connected_players = original_connected
+			if not ok then error(reason) end
+		end
+		core.registered_globalsteps[index] = wrapped
+		core.callback_origins[wrapped] = origin
+	end
+end
 
 local function admission_reason(name)
 	for _, callback in ipairs(core.registered_on_prejoinplayers) do
@@ -17,6 +40,9 @@ local function execute(command)
 	local name = command.username
 	if command.operation == "ready" then
 		return {ready = true, bridge_modpath = core.get_modpath("civicrm_bridge")}
+	elseif command.operation == "set_time" then
+		os.time = command.timestamp and function() return command.timestamp end or original_time
+		return {ok = true}
 	elseif command.operation == "snapshot" then
 		local auth = core.get_auth_handler().get_auth(name)
 		return {

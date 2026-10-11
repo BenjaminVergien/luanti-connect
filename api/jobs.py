@@ -164,7 +164,8 @@ class Jobs:
 
     def account_result(self, row, raw):
         result = world_worker.decode(raw)
-        if (not isinstance(result, dict) or result.get('version') != 1
+        if (not isinstance(result, dict) or type(result.get('version')) is not int
+                or result['version'] not in (1, 2)
                 or result.get('job_id') != row['job_id']
                 or result.get('status') not in ('ok', 'partial', 'error')
                 or not isinstance(result.get('accounts'), list)):

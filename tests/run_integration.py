@@ -110,11 +110,11 @@ class Harness:
     def snapshot(self, username):
         return self.control_command("snapshot", username=username)
 
-    def submit(self, job_id, accounts=None, raw=None):
+    def submit(self, job_id, accounts=None, raw=None, version=1):
         result = self.runtime / "outbox" / (job_id + ".json")
         result.unlink(missing_ok=True)
         if raw is None:
-            raw = json.dumps({"version": 1, "job_id": job_id,
+            raw = json.dumps({"version": version, "job_id": job_id,
                               "operation": "sync_accounts", "accounts": accounts})
         self.atomic_write(self.runtime / "inbox" / (job_id + ".json"), raw)
         response = self.wait_json(result)
@@ -255,6 +255,7 @@ def run(h):
     assert state["denial"] is False and state["password"] == changed_password
     assert h.snapshot("other_demo")["exists"], "Omitted account was removed"
     assert h.snapshot("ben")["denial"] is False
+    run_access_windows(h)
     # Exercise the actual CLI and checked-in examples, including the final
     # readmission which deliberately restores the participant role.
     repo = Path(__file__).resolve().parent.parent
@@ -294,6 +295,76 @@ def run(h):
         if path.exists():
             assert not any(secret in path.read_text(errors="replace") for secret in SECRETS), "Password leaked in %s" % path.name
     assert not list((h.runtime / "inbox").glob("*.json")), "Consumed inputs were retained"
+
+
+def run_access_windows(h):
+    start, end = 1800000000, 1800000060
+    window = {"starts_at": start, "ends_at": end}
+    entry = {**account("timed_demo", password=SECRETS[0]), "access_window": window}
+    h.control_command("set_time", timestamp=start - 1)
+    initial = h.submit("timed-create", [entry], version=2)
+    assert initial["version"] == 2 and initial["accounts"][0]["status"] == "created", initial
+    assert h.snapshot("timed_demo")["denial"]
+    h.control_command("set_time", timestamp=start)
+    assert h.snapshot("timed_demo")["denial"] is False
+    h.control_command("set_password", username="timed_demo", password=SECRETS[1])
+    password = h.snapshot("timed_demo")["password"]
+    updated = h.submit("timed-v1-update", [account("timed_demo", "facilitator", password=SECRETS[2])])
+    assert updated["version"] == 1
+    checkpoint = json.loads((h.runtime / "state.json").read_text())
+    assert checkpoint["accounts"]["timed_demo"]["access_window"] == window
+    assert h.snapshot("timed_demo")["password"] == password
+    h.control_command("set_time", timestamp=end - 1)
+    assert h.snapshot("timed_demo")["denial"] is False
+    h.control_command("mock_online", username="timed_demo")
+    h.control_command("set_time", timestamp=end)
+    deadline = time.monotonic() + 2
+    while not h.snapshot("timed_demo")["kicked"] and time.monotonic() < deadline:
+        time.sleep(.05)
+    assert h.snapshot("timed_demo")["denial"] and h.snapshot("timed_demo")["kicked"]
+    assert h.snapshot("ben")["denial"] is False
+    # An old successful receipt cannot override a subsequent timed withdrawal.
+    h.submit("timed-withdraw", [{**entry, "admitted": False}], version=2)
+    assert h.submit("timed-create", [entry], version=2) == initial
+    h.control_command("set_time", timestamp=start)
+    assert h.snapshot("timed_demo")["denial"]
+    h.submit("timed-readmit", [{**entry, "role": "facilitator"}], version=2)
+    assert h.snapshot("timed_demo")["denial"] is False
+    h.stop()
+    h.start()
+    h.control_command("set_time", timestamp=end)
+    assert h.snapshot("timed_demo")["denial"]
+    assert h.snapshot("timed_demo")["password"] == password
+    assert h.submit("timed-create", [entry], version=2) == initial
+    assert h.snapshot("timed_demo")["denial"]
+    # Late creation remains outside its access period, even with admitted=true.
+    late = {**account("late_demo", password=SECRETS[0]), "access_window": window}
+    assert h.submit("timed-late", [late], version=2)["accounts"][0]["status"] == "created"
+    assert h.snapshot("late_demo")["denial"]
+    invalid = [None, {}, {"starts_at": start}, {"starts_at": True, "ends_at": end},
+               {"starts_at": start + .5, "ends_at": end}, {"starts_at": start, "ends_at": start},
+               {"starts_at": end, "ends_at": start}, {"starts_at": start, "ends_at": 2**53},
+               {**window, "unexpected": 1}]
+    for index, value in enumerate(invalid):
+        invalid_entry = {**account("invalid_timed", password=SECRETS[0]), "access_window": value}
+        response = h.submit("invalid-window-%d" % index, [invalid_entry], version=2)
+        assert response["version"] == 2 and response.get("code") == "invalid_access_window", response
+        assert not h.snapshot("invalid_timed")["exists"]
+    missing = h.submit("missing-window", [account("missing_timed", password=SECRETS[0])], version=2)
+    assert missing.get("code") == "invalid_access_window"
+    assert h.submit("v1-window", [entry]).get("code") == "invalid_access_window"
+    # Invalid persisted windows fail closed on restart.
+    h.stop()
+    checkpoint = json.loads((h.runtime / "state.json").read_text())
+    original_checkpoint = json.dumps(checkpoint)
+    checkpoint["accounts"]["timed_demo"]["access_window"]["ends_at"] = start
+    (h.runtime / "state.json").write_text(json.dumps(checkpoint))
+    h.start()
+    assert h.snapshot("bridge_demo")["denial"]
+    assert h.snapshot("ben")["denial"] is False
+    h.stop()
+    (h.runtime / "state.json").write_text(original_checkpoint)
+    h.start()
 
 
 def main():

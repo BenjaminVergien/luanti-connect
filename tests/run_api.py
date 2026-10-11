@@ -72,8 +72,8 @@ class Fixture(unittest.TestCase):
     def app(self, background=False):
         return create_app(self.config, self.runner, background=background)
 
-    def result(self, world, job_id='api-demo', status='ok'):
-        result = {'version': 1, 'job_id': job_id, 'status': status,
+    def result(self, world, job_id='api-demo', status='ok', version=1):
+        result = {'version': version, 'job_id': job_id, 'status': status,
                   'accounts': [{'username': 'api_demo', 'status': 'created'}]}
         runtime = Path(self.config['worlds'][world])
         (runtime / 'outbox' / (job_id + '.json')).write_bytes(encoded(result))
@@ -82,6 +82,42 @@ class Fixture(unittest.TestCase):
 
 
 class ApiTests(Fixture):
+    def test_v2_access_window_validation_and_result_version(self):
+        value = account('timed-api')
+        value['version'] = 2
+        window = {'starts_at': 1800000000, 'ends_at': 1800000060}
+        value['accounts'][0]['access_window'] = window
+        raw = b'\n' + encoded(value) + b'\n'
+        invalid_windows = [None, {}, {'starts_at': 1}, {'starts_at': True, 'ends_at': 2},
+                           {'starts_at': 1.5, 'ends_at': 2}, {'starts_at': 2, 'ends_at': 2},
+                           {'starts_at': 3, 'ends_at': 2}, {'starts_at': 1, 'ends_at': 2**53},
+                           {**window, 'extra': True}]
+        with TestClient(self.app()) as client:
+            for bad_window in invalid_windows:
+                bad = json.loads(encoded(value))
+                bad['accounts'][0]['access_window'] = bad_window
+                self.assertEqual(client.post('/v1/worlds/dev/accounts/jobs', content=encoded(bad),
+                                             headers=self.headers).status_code, 400)
+            missing = json.loads(encoded(value))
+            del missing['accounts'][0]['access_window']
+            self.assertEqual(client.post('/v1/worlds/dev/accounts/jobs', content=encoded(missing),
+                                         headers=self.headers).status_code, 400)
+            v1 = {**value, 'version': 1}
+            self.assertEqual(client.post('/v1/worlds/dev/accounts/jobs', content=encoded(v1),
+                                         headers=self.headers).status_code, 400)
+            accepted = client.post('/v1/worlds/dev/accounts/jobs', content=raw, headers=self.headers)
+            self.assertEqual(accepted.status_code, 202)
+            self.assertEqual(accepted.json()['version'], 1)
+            client.app.state.jobs.tick_accounts()
+            self.assertEqual((self.base / 'dev/inbox/timed-api.json').read_bytes(), raw)
+            expected = self.result('dev', 'timed-api', version=2)
+            client.app.state.jobs.tick_accounts()
+            completed = client.get(accepted.json()['result_url'], headers=self.headers).json()
+            self.assertEqual(completed['version'], 1)
+            self.assertEqual(completed['result'], expected)
+            self.assertNotIn('initial_password', json.dumps(completed))
+            self.assertEqual(client.post('/v1/worlds/dev/accounts/jobs', content=raw, headers=self.headers).status_code, 200)
+
     def test_saved_map_catalogue_is_authenticated_and_has_no_jobs_or_lifecycle_side_effects(self):
         for world in ('dev', 'test'):
             root = self.base / 'maps' / world
@@ -361,6 +397,64 @@ class InstallerTests(Fixture):
 
 @unittest.skipUnless(shutil.which('luanti'), 'Luanti is required for disposable engine transport tests')
 class EngineTests(Fixture):
+    def test_v2_api_time_boundaries_late_job_and_restart(self):
+        from run_integration import Harness
+        harness = Harness(shutil.which('luanti'), ROOT, self.base,
+                          Path('/home/ben/.minetest/games/minetest_game'))
+        self.addCleanup(shutil.rmtree, harness.path)
+        self.addCleanup(harness.stop)
+        harness.start()
+        self.config['worlds']['dev'] = str(harness.runtime)
+        start, end = 1800000000, 1800000060
+        value = account('api-window')
+        value['version'] = 2
+        value['accounts'][0]['access_window'] = {'starts_at': start, 'ends_at': end}
+        harness.control_command('set_time', timestamp=start - 1)
+        with TestClient(self.app(background=True)) as client:
+            response = client.post('/v1/worlds/dev/accounts/jobs', content=encoded(value), headers=self.headers)
+            self.assertEqual(response.status_code, 202)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                result = client.get(response.json()['result_url'], headers=self.headers).json()
+                if result['state'] == 'completed':
+                    break
+                time.sleep(.05)
+            self.assertEqual(result['result']['version'], 2)
+            self.assertEqual(result['result']['accounts'][0]['status'], 'created')
+            self.assertTrue(harness.snapshot('api_demo')['denial'])
+            harness.control_command('set_time', timestamp=start)
+            self.assertFalse(harness.snapshot('api_demo')['denial'])
+            harness.control_command('mock_online', username='api_demo')
+            harness.control_command('set_time', timestamp=end)
+            deadline = time.monotonic() + 2
+            while not harness.snapshot('api_demo')['kicked'] and time.monotonic() < deadline:
+                time.sleep(.05)
+            self.assertTrue(harness.snapshot('api_demo')['kicked'])
+            harness.stop()
+            harness.start()
+            harness.control_command('set_time', timestamp=end)
+            self.assertTrue(harness.snapshot('api_demo')['denial'])
+            self.assertEqual(client.post('/v1/worlds/dev/accounts/jobs', content=encoded(value),
+                                         headers=self.headers).status_code, 200)
+            self.assertTrue(harness.snapshot('api_demo')['denial'])
+            harness.stop()
+            late = json.loads(encoded(value))
+            late['job_id'] = 'api-late-window'
+            late['accounts'][0]['username'] = 'late_api'
+            waiting = client.post('/v1/worlds/dev/accounts/jobs', content=encoded(late), headers=self.headers)
+            self.assertEqual(waiting.status_code, 202)
+            self.assertEqual(waiting.json()['state'], 'pending')
+            harness.start()
+            harness.control_command('set_time', timestamp=end)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                result = client.get(waiting.json()['result_url'], headers=self.headers).json()
+                if result['state'] == 'completed':
+                    break
+                time.sleep(.05)
+            self.assertEqual(result['result']['accounts'][0]['status'], 'created')
+            self.assertTrue(harness.snapshot('late_api')['denial'])
+
     def test_api_import_preserves_password_and_enforces_withdrawal(self):
         from run_integration import Harness
         harness = Harness(shutil.which('luanti'), ROOT, self.base,

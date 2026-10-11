@@ -15,7 +15,7 @@ def validate_accounts(raw):
     value = world_worker.decode(raw)
     if not isinstance(value, dict) or set(value) != {'version', 'job_id', 'operation', 'accounts'}:
         raise ValueError('Invalid account envelope')
-    if type(value['version']) is not int or value['version'] != 1 or value['operation'] != 'sync_accounts':
+    if type(value['version']) is not int or value['version'] not in (1, 2) or value['operation'] != 'sync_accounts':
         raise ValueError('Unsupported contract')
     if not isinstance(value['job_id'], str) or not JOB_ID.fullmatch(value['job_id']):
         raise ValueError('Invalid job ID')
@@ -25,6 +25,8 @@ def validate_accounts(raw):
     seen = set()
     for account in accounts:
         required = {'username', 'role', 'admitted'}
+        if value['version'] == 2:
+            required.add('access_window')
         if (not isinstance(account, dict) or not required <= set(account)
                 or set(account) - required - {'initial_password'}):
             raise ValueError('Invalid account fields')
@@ -36,6 +38,13 @@ def validate_accounts(raw):
             raise ValueError('Invalid role or admission')
         if 'initial_password' in account and (not isinstance(account['initial_password'], str) or not account['initial_password']):
             raise ValueError('Invalid initial password')
+        if value['version'] == 2:
+            window = account['access_window']
+            if (not isinstance(window, dict) or set(window) != {'starts_at', 'ends_at'}
+                    or any(type(window[key]) is not int or abs(window[key]) > 2**53 - 1
+                           for key in ('starts_at', 'ends_at'))
+                    or window['ends_at'] <= window['starts_at']):
+                raise ValueError('Invalid access window')
     return value
 
 

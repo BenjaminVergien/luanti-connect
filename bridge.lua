@@ -57,13 +57,31 @@ return function(core, storage)
 
     local function persist()
         -- Atomic checkpoint closes the gap before SQLite mod storage is flushed.
-        -- Contains only ownership, role, and admission; never passwords.
+        -- Contains only ownership, role, admission and access windows; never passwords.
         if not write_json(root .. "/state.json", state) then
             stop_imports()
             return false
         end
         storage:set_string("state", encode(state))
         return true
+    end
+
+    local function valid_window(window)
+        if type(window) ~= "table" or window == null then return false end
+        for key in pairs(window) do
+            if key ~= "starts_at" and key ~= "ends_at" then return false end
+        end
+        for _, key in ipairs({"starts_at", "ends_at"}) do
+            local value = window[key]
+            if type(value) ~= "number" or value % 1 ~= 0
+                or math.abs(value) > 9007199254740991 then return false end
+        end
+        return window.ends_at > window.starts_at
+    end
+
+    local function same_window(left, right)
+        if left == nil or right == nil then return left == right end
+        return left.starts_at == right.starts_at and left.ends_at == right.ends_at
     end
 
     local function valid_state(value)
@@ -74,7 +92,8 @@ return function(core, storage)
         for name, account in pairs(value.accounts) do
             if type(name) ~= "string" or not core.is_valid_player_name(name)
                 or type(account) ~= "table" or type(account.admitted) ~= "boolean"
-                or not roles[account.role] then return false end
+                or not roles[account.role]
+                or (account.access_window ~= nil and not valid_window(account.access_window)) then return false end
         end
         return true
     end
@@ -84,6 +103,11 @@ return function(core, storage)
         if not ready or halted or not state.accounts[name]
             or not state.accounts[name].admitted then
             return "You are not currently admitted to this server."
+        end
+        local window = state.accounts[name].access_window
+        local now = os.time()
+        if window and (now < window.starts_at or now >= window.ends_at) then
+            return "Your access period is not currently active."
         end
     end
 
@@ -106,7 +130,7 @@ return function(core, storage)
     end
 
     local function validate(job, file_id)
-        if type(job) ~= "table" or job == null or job.version ~= 1
+        if type(job) ~= "table" or job == null or (job.version ~= 1 and job.version ~= 2)
             or not safe_id(job.job_id) or job.job_id ~= file_id
             or job.operation ~= "sync_accounts" then return "invalid_job" end
         local accounts = job.accounts
@@ -132,6 +156,10 @@ return function(core, storage)
             if account.initial_password ~= nil
                 and (type(account.initial_password) ~= "string"
                     or #account.initial_password == 0) then return "invalid_account" end
+            if (job.version == 2 and not valid_window(account.access_window))
+                or (job.version == 1 and account.access_window ~= nil) then
+                return "invalid_access_window"
+            end
             local lower = account.username:lower()
             if seen[lower] then return "duplicate_username" end
             seen[lower] = true
@@ -157,10 +185,11 @@ return function(core, storage)
             return rejected(name, "initial_password_required")
         end
         local created = not existing
+        local window = account.access_window or (owned and owned.access_window)
         if created then
             -- Reserve ownership durably before creation. Interrupted creations can
             -- resume, but will never reset an account which already exists.
-            state.accounts[name] = {role = account.role, admitted = false}
+            state.accounts[name] = {role = account.role, admitted = false, access_window = window}
             if not persist() then return rejected(name, "storage_error") end
             auth.create_auth(name, core.get_password_hash(name, account.initial_password))
             existing = auth.get_auth(name)
@@ -168,9 +197,10 @@ return function(core, storage)
             names[name:lower()] = name
         end
         local changed = created or not owned or owned.role ~= account.role
-            or owned.admitted ~= account.admitted
+            or owned.admitted ~= account.admitted or not same_window(owned.access_window, window)
         if not account.admitted then
-            state.accounts[name] = {role = state.accounts[name].role, admitted = false}
+            state.accounts[name] = {role = state.accounts[name].role, admitted = false,
+                access_window = window}
             if not persist() then return rejected(name, "storage_error") end
             reconcile_online(name)
         end
@@ -181,14 +211,14 @@ return function(core, storage)
             privileges[privilege] = wanted
         end
         core.set_player_privs(name, privileges)
-        state.accounts[name] = {role = account.role, admitted = account.admitted}
+        state.accounts[name] = {role = account.role, admitted = account.admitted, access_window = window}
         if not persist() then return rejected(name, "storage_error") end
         reconcile_online(name)
         return {username = name, status = created and "created" or (changed and "updated" or "unchanged")}
     end
 
-    local function error_result(id, code)
-        return {version = 1, job_id = id, status = "error", code = code, accounts = {}}
+    local function error_result(id, code, version)
+        return {version = version or 1, job_id = id, status = "error", code = code, accounts = {}}
     end
 
     local function publish(id, result, source)
@@ -208,6 +238,8 @@ return function(core, storage)
         local data = read_file(source, max_bytes)
         if not data then return end
         local oversized = #data > max_bytes
+        local job = not oversized and parse(data) or nil
+        local version = type(job) == "table" and job.version == 2 and 2 or 1
         -- Oversized requests permanently consume their ID without reading the
         -- remaining unbounded input; any later in-limit request conflicts.
         local digest = oversized and "oversized" or core.sha256(data)
@@ -221,22 +253,21 @@ return function(core, storage)
             local receipt = parse(receipt_text)
             if type(receipt) ~= "table" or type(receipt.digest) ~= "string"
                 or type(receipt.result) ~= "table" or receipt.result == null
-                or receipt.result.version ~= 1 or receipt.result.job_id ~= id
+                or (receipt.result.version ~= 1 and receipt.result.version ~= 2) or receipt.result.job_id ~= id
                 or not ({ok = true, partial = true, error = true})[receipt.result.status] then
                 stop_imports()
                 return
             end
             publish(id, receipt.digest == digest and receipt.result
-                or error_result(id, "job_id_conflict"), source)
+                or error_result(id, "job_id_conflict", version), source)
             return
         end
-        local job = not oversized and parse(data) or nil
         local code = oversized and "oversized_job" or validate(job, id)
         local result
         if code then
-            result = error_result(id, code)
+            result = error_result(id, code, version)
         else
-            result = {version = 1, job_id = id, status = "ok", accounts = {}}
+            result = {version = version, job_id = id, status = "ok", accounts = {}}
             local auth, names = core.get_auth_handler(), {}
             local function remember_name(name)
                 local lower = name:lower()
@@ -298,10 +329,10 @@ return function(core, storage)
         elapsed = elapsed + dtime
         if elapsed < 1 then return end
         elapsed = 0
+        for _, player in ipairs(core.get_connected_players()) do
+            reconcile_online(player:get_player_name())
+        end
         if not ready or halted then
-            for _, player in ipairs(core.get_connected_players()) do
-                reconcile_online(player:get_player_name())
-            end
             return
         end
         local files = core.get_dir_list(paths.inbox, false)
