@@ -11,6 +11,8 @@ import sqlite3
 import stat
 import subprocess
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from lifecycle.instance_contract import validate as validate_instance
 
 MAX_BYTES = 16384
 COMMAND = ('/usr/bin/sudo', '-n', '/usr/local/sbin/civicrm-worldctl')
@@ -43,6 +45,9 @@ def validate(raw):
     request = decode(raw)
     if not isinstance(request, dict):
         raise ValueError('Request must be an object.')
+    if type(request.get('version')) is int and request['version'] == 2:
+        validate_instance(request)
+        return request, [*COMMAND, 'instance']
     if type(request.get('version')) is not int or request['version'] != 1:
         raise ValueError('version must be integer 1.')
     job_id = request.get('job_id')
@@ -63,9 +68,9 @@ def validate(raw):
     return request, arguments
 
 
-def invoke(arguments):
+def invoke(arguments, raw=None):
     try:
-        process = subprocess.run(arguments, stdin=subprocess.DEVNULL,
+        process = subprocess.run(arguments, **({'input': raw} if raw is not None else {'stdin': subprocess.DEVNULL}),
                                  capture_output=True, timeout=600, check=False,
                                  env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
     except subprocess.TimeoutExpired:
@@ -136,13 +141,17 @@ def handle(raw, state_dir, runner=invoke):
         if previous:
             if previous[0] != digest:
                 return failure('job_id_conflict', 'This job_id was used with different request bytes.', job_id)
-            if previous[1] is None:
+            if previous[1] is None and request['version'] == 1:
                 return failure('outcome_unknown', 'Interrupted request; inspect fresh status. This ID will not execute again.', job_id)
-            return json.loads(previous[1])
+            if previous[1] is not None:
+                return json.loads(previous[1])
         # Commit intent before invoking: a crash cannot cause an automatic replay.
-        db.execute('INSERT INTO jobs VALUES (?, ?, NULL)', (job_id, digest))
+        db.execute('INSERT OR IGNORE INTO jobs VALUES (?, ?, NULL)', (job_id, digest))
         db.commit()
-        result = {**runner(arguments), 'version': 1, 'job_id': job_id}
+        outcome = runner(arguments, raw) if request['version'] == 2 else runner(arguments)
+        result = {**outcome, 'version': request['version'], 'job_id': job_id}
+        if request['version'] == 2:
+            result['instance_id'] = request['instance_id']
         db.execute('UPDATE jobs SET result=? WHERE job_id=?', (json.dumps(result), job_id))
         db.commit()
         return result

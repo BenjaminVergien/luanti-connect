@@ -19,7 +19,7 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     config = json.loads(read_regular(args.config, 16384, {0}, forbidden=0o022))
-    if set(config['worlds']) != {'dev', 'test'}:
+    if not isinstance(config.get('worlds'), dict) or (config.get('backend', 'systemd') != 'docker' and set(config['worlds']) != {'dev', 'test'}):
         raise ValueError('Invalid world configuration')
     import uvicorn
     uvicorn.run(create_app(config), host='127.0.0.1', port=8765, workers=1,

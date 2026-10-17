@@ -1,5 +1,7 @@
 # Account rejection and partial-success examples
 
+These are legacy account v1 filesystem/mod fixtures. HTTPS validates requests before publication and can return HTTP/schema errors instead; they are not exact HTTPS error responses. For portal account v2 windows and private-instance routing, see the [integration contract](../../docs/INTEGRATION.md#account-request-v1v2).
+
 These files are valid JSON but intentionally exercise errors. They are not part of the successful numbered sequence. Responses assume `name = ben`, the numbered examples have already run, and the specific new usernames here do not already exist.
 
 | Request | Preconditions / reason | Expected response |

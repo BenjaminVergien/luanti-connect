@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import pwd
 import re
 import sys
 
@@ -54,7 +53,7 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths={STATE} /var/lib/civicrm-worldctl /run/civicrm-worldctl.lock /home/ben/luanti-dev/world/civicrm_bridge/inbox /home/ben/luanti-dev/worlds/test/civicrm_bridge/inbox
+ReadWritePaths={STATE} /var/lib/civicrm-worldctl /run/civicrm-worldctl.lock /home/ben/luanti-dev/instances
 # sudo must retain its setuid transition for the exact root-owned controller.
 # NoNewPrivileges=true would disable that transition.
 
@@ -66,9 +65,11 @@ WantedBy=multi-user.target
 def deployment_files(domain, owner_uid):
     config = {'hostname': hostname(domain), 'token_file': str(ETC / 'token.json'),
               'state_dir': str(STATE), 'world_owner_uid': owner_uid,
+              'templates': {}, 'instances_root': '/home/ben/luanti-dev/instances',
+              'instance_registry': '/var/lib/civicrm-worldctl/instances',
               'worlds': {'dev': '/home/ben/luanti-dev/world/civicrm_bridge',
                          'test': '/home/ben/luanti-dev/worlds/test/civicrm_bridge'}}
-    commands = ('status', 'stop_world', 'start_world dev', 'start_world test', 'switch_world dev', 'switch_world test')
+    commands = ('status', 'stop_world', 'start_world dev', 'start_world test', 'switch_world dev', 'switch_world test', 'instance', 'reconcile_instances')
     sudoers = f'{USER} ALL=(root) NOPASSWD: ' + ', '.join('/usr/local/sbin/civicrm-worldctl ' + x for x in commands) + '\n'
     wrapper = '#!/bin/sh\nexec ' + str(LIB) + '/venv/bin/python -I ' + str(LIB) + '/api/token_cli.py "$@"\n'
     launcher = ('import sys\nsys.path.insert(0, "/usr/local/lib/civicrm-bridge-api")\n'
@@ -83,6 +84,7 @@ def deployment_files(domain, owner_uid):
 
 
 def main():
+    import pwd
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--hostname', required=True, type=hostname)
     parser.add_argument('--output', required=True, type=Path, help='New private directory outside the Git checkout')

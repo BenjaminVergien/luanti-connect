@@ -9,9 +9,11 @@ import sqlite3
 import stat
 import threading
 import uuid
+import time
 
 from api.security import check_parents, fsync_directory
 from tools import world_worker
+from lifecycle.instances import runtime_for
 
 
 class Conflict(Exception):
@@ -80,6 +82,7 @@ class Jobs:
     def __init__(self, config, runner=None):
         self.config = config
         self.runner = runner or world_worker.invoke
+        self.last_schedule_tick = 0
         self.state = Path(config['state_dir'])
         check_parents(self.state)
         self.state.mkdir(mode=0o700, exist_ok=True)
@@ -155,11 +158,11 @@ class Jobs:
         return self.get(kind, world, job_id)
 
     def result_bytes(self, row):
-        directory = Path(self.config['worlds'][row['world']]) / 'outbox'
+        directory = Path(runtime_for(self.config, row['world'], allow_archived=True)) / 'outbox'
         return read_job(directory, row['job_id'] + '.json', self.config['world_owner_uid'])
 
     def pending_bytes(self, row):
-        directory = Path(self.config['worlds'][row['world']]) / 'inbox'
+        directory = Path(runtime_for(self.config, row['world'], allow_archived=True)) / 'inbox'
         return read_job(directory, row['job_id'] + '.json', self.config['world_owner_uid'])
 
     def account_result(self, row, raw):
@@ -181,8 +184,9 @@ class Jobs:
             if row['kind'] == 'lifecycle':
                 # Existing worker receipts replay; a missing receipt records unknown
                 # through a runner that cannot invoke the controller.
+                request = world_worker.decode(row['raw'])
                 result = world_worker.handle(row['raw'], self.state / 'lifecycle',
-                                             runner=lambda args: unknown(row['job_id']))
+                    runner=self.runner if request['version'] == 2 else lambda args: unknown(row['job_id']))
                 self.finish_lifecycle(row, result)
             else:
                 try:
@@ -216,7 +220,7 @@ class Jobs:
                 except FileNotFoundError:
                     baseline = None
                 self.update(row, 'dispatching', baseline=baseline)
-                directory = Path(self.config['worlds'][row['world']]) / 'inbox'
+                directory = Path(runtime_for(self.config, row['world'])) / 'inbox'
                 try:
                     publish(directory, row['job_id'] + '.json', row['raw'])
                 except FileExistsError:
@@ -257,3 +261,6 @@ class Jobs:
             self.update(row, 'dispatching')
             result = world_worker.handle(row['raw'], self.state / 'lifecycle', runner=self.runner)
             self.finish_lifecycle(row, result)
+        if 'instance_registry' in self.config and time.monotonic() - self.last_schedule_tick >= 10:
+            self.runner([*world_worker.COMMAND, 'reconcile_instances'])
+            self.last_schedule_tick = time.monotonic()

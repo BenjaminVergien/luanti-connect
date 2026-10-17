@@ -1,119 +1,120 @@
 # CiviCRM Bridge
 
-See [GitHub code archiving](tools/ARCHIVING.md) for repository credentials and checks before pushing.
+Luanti account/admission mod, restricted world controller and bearer-authenticated
+HTTPS API used by the separate Luanti Portal. The historical project name does
+not imply a working CiviCRM extension.
 
-For the later CiviCRM component, start with the [integration contract](docs/INTEGRATION.md) and [request/response example catalog](examples/README.md). They describe implemented account JSON, world-control commands, and the [local lifecycle JSON worker](tools/WORLD_WORKER.md).
+Status reflects source and tests as of 2026-10-17, not a check of the installed
+server. **Implemented** means present in code; **Provisional** identifies moving
+parts or host-specific assumptions; **Planned** is reserved for explicit future
+work. Start with the [integration contract](docs/INTEGRATION.md),
+[HTTPS API and deployment guide](docs/HTTPS_API.md), and
+[example catalog](examples/README.md).
 
-A small Luanti mod for local JSON account imports. This first version uses fictitious participants, the existing Luanti authentication API, and a filesystem inbox. It creates accounts, synchronizes roles and admission, and writes JSON results while the server runs. It does not connect to CiviCRM yet.
+## Responsibilities and status
 
-## Installation
-
-For the restricted `dev`/`test` service controller, see [world lifecycle setup](lifecycle/README.md).
-
-The development setup uses Luanti 5.17.0 with LuaJIT and Minetest Game:
-
-- Shared mod and standalone Git repository: `/home/ben/.minetest/mods/civicrm_bridge`
-- World: `/home/ben/luanti-dev/world`
-- Server configuration: `/home/ben/luanti-dev/server.conf`
-- Runtime inbox and outbox: `/home/ben/luanti-dev/world/civicrm_bridge`
-- Service: `luanti-dev.service`, running as `ben`; client UDP port 30000.
-
-Enable `load_mod_civicrm_bridge = mods/civicrm_bridge` in each selected world's `world.mt`. The shared mod directory belongs to the operating-system user running Luanti (`ben` here); other service users need their own installation or a configured shared content path. Keep one source copy: do not also place this mod in a world's `worldmods` directory.
-
-Each world keeps its own authentication records, bridge mod storage, and runtime inbox/outbox. The mod derives its runtime directory from `core.get_worldpath()`; worlds do not share account or admission state. Use the reviewed lifecycle installer to protect the world and runtime parent directories. Grant the integration account write access only to the `inbox`, traversal to that inbox, and read-only access to `outbox` results; receipts and the checkpoint remain service-private. The service user needs read/write access throughout its runtime. Existing broad inherited write ACLs must be removed from world settings, databases, receipts, and runtime parents. Keep pending input files private: they contain initial passwords. The shared source checkout remains trusted developer code; see the [lifecycle trust boundary](lifecycle/README.md#trust-boundary-and-upgrades).
-
-From the existing **ben** session, load the mod with:
-
-```bash
-sudo systemctl restart luanti-dev.service
-```
-
-Account imports require no sudo rights or restart. The separately installed world controller grants the developer account only its exact lifecycle commands. This mod enables a strict admission whitelist: existing accounts other than the configured administrator need a bridge-managed admission record before they can join. Do not enable it on a different world without accounting for that behavior.
-
-## HTTPS API
-
-For backend-to-server communication, use the bearer-authenticated API for account
-imports and world lifecycle jobs. Follow [manual server setup and backend examples](docs/HTTPS_API.md).
-It uses the existing reverse proxy, one backend token and a separate unprivileged
-service identity. Configuration preparation does not install or change services.
-
-## Local demonstration
-
-From the mod directory, run these jobs in order with Python 3:
-
-```bash
-python3 tools/simulate.py examples/01-create.json
-python3 tools/simulate.py examples/02-roles.json
-python3 tools/simulate.py examples/03-withdraw.json
-python3 tools/simulate.py examples/04-readmit.json
-```
-
-Every example identity and password is fictitious. Prefer an isolated or dedicated test world and pass its runtime directory with `--runtime-dir`; the commands above default to the development world. After the first job, `demo_player` can log in using the example password. Change that password in the client, then rerun the creation job with a fresh ID to verify that imports preserve the new password:
-
-```bash
-python3 tools/simulate.py --job-id demo-password-preserved examples/01-create.json
-```
-
-Keep the player connected during the role and withdrawal jobs to observe live privilege updates and immediate disconnection. The readmission job permits login again without changing the password or deleting player data.
-
-The simulator accepts `--runtime-dir PATH`, `--timeout SECONDS` (default 15), and `--job-id ID`. Its default runtime directory is the development world shown above; use `--runtime-dir /path/to/world/civicrm_bridge` when targeting another world. It atomically publishes a complete input, refuses to overwrite a pending job, waits for the server to consume it, and prints result fields only. Exit codes are 0 for success, 1 for a partial/error result, 2 for input or filesystem errors, and 3 for a timeout. A timeout leaves the job queued; inspect the service and result file before retrying.
-
-## JSON contract
-
-```json
-{
-  "version": 1,
-  "job_id": "demo-001",
-  "operation": "sync_accounts",
-  "accounts": [
-    {
-      "username": "demo_player",
-      "initial_password": "DemoOnly-ChangeMe!",
-      "role": "participant",
-      "admitted": true
-    }
-  ]
-}
-```
-
-- `job_id`: 1–64 ASCII letters, digits, underscores, or hyphens. Publish as `inbox/<job_id>.json`.
-- `accounts`: 1–100 entries. The complete file must not exceed 256 KiB. Usernames identify accounts; omitted accounts remain unchanged.
-- `initial_password`: a nonempty string required for account creation. For an existing bridge-managed account it is ignored, including on repeated imports.
-- `role`: `participant` or `facilitator`; `admitted`: an explicit JSON boolean.
-
-For manual delivery, write a temporary filename in the inbox and rename it to the final `.json` name only when complete. The simulator uses an atomic hard link to publish without overwriting another pending submission. Temporary files are ignored. The mod polls once per second and processes one job per poll in filename order.
-
-The result appears atomically at `outbox/<job_id>.json`, with `job_id`, overall `status` (`ok`, `partial`, or `error`), and `accounts` containing `username` and `status` (`created`, `updated`, `unchanged`, or `rejected`), with an optional `code`. Invalid jobs can return an overall error without account outcomes. The complete structure is validated before any account changes; valid batches can still have individual account conflicts, so the batch is not a transaction.
-
-Completed IDs are retained in durable receipts. Byte-identical retries return their recorded results without reapplying account changes. Reusing an ID for changed content, including whitespace changes, yields `job_id_conflict`; use a fresh ID for each new change. Oversized inputs permanently consume their IDs with an `oversized_job` result; oversized retries retain that rejection, and a later in-limit input with that ID conflicts. Input is removed only after a result is recorded. Results, receipts, and logs do not contain passwords, and input is not archived.
-
-## Accounts, roles, and admission
-
-| Role | Managed privileges |
+| Component | Implemented responsibility |
 | --- | --- |
-| `participant` | `interact`, `shout` |
-| `facilitator` | `interact`, `shout`, `fly`, `fast`, `teleport` |
+| Luanti Portal (separate project) | Portal users/organizations, permissions, approvals, reservations, account roster and job orchestration |
+| Bridge HTTPS API | Backend bearer authentication, durable acceptance, account/lifecycle delivery, polling and recovery |
+| Controller and publisher | Clean template bundles, private game copies, enabled access windows, archival and service transitions |
+| Luanti mod | World-local account ownership, participant/facilitator privileges, admission windows, live kicks and durable receipts |
 
-Each import synchronizes these five privileges, including revocation on demotion. Unrelated manually assigned privileges remain unchanged; JSON cannot grant arbitrary privileges. Existing unmanaged accounts, case-conflicting usernames, and the configured administrator are rejected rather than taken over.
+**Implemented:** the portal uses published templates and private instances via
+lifecycle v2 and timed account v2 jobs. Each copy has separate authentication,
+player data and bridge state. The API reconciles instance schedules approximately
+every ten seconds; the mod enforces admission locally while Luanti runs. Legacy
+`dev`/`test` lifecycle v1 commands and filesystem account imports remain available
+for maintenance and tests.
 
-Admission is independent of privileges. Only admitted bridge accounts and the administrator configured by Luanti's `name` setting (`ben` here) may join. Unknown accounts cannot self-register through login. Missing admission state denies access. Withdrawal disconnects online players immediately and blocks reconnection, while retaining their accounts, passwords, and player data. Ownership and admission are persisted in an atomic, password-free runtime checkpoint, with a mod storage mirror; durable receipts retain completed job outcomes.
+**Provisional / moving parts:** host paths/identities, template publication and
+installed-snapshot upgrades. The portal UI and Hetzner bootstrap also continue to
+evolve. Portal VM provisioning verifies the engine only; it does not deploy this
+bridge, a game/world, or public endpoints.
 
-Password reset is deliberately separate and is not implemented in v1. Event memberships, CiviCRM integration, HTTP delivery, and automated SSH transfer are also outside v1.
+The Docker backend and separate preflight/apply installer are described in the
+[Docker and Windows workflow](lifecycle/README.md#docker-backend). Native systemd
+remains the default. Automatic production bridge deployment on VM rental remains
+future work.
 
-## Tests and repository boundaries
+**Planned:** a CiviCRM component. Contact-to-account mapping, participation policy
+and credential/retry storage still need decisions and implementation. See
+[future CiviCRM decisions](docs/INTEGRATION.md#planned-civicrm-component).
 
-Run the isolated engine integration checks on the server:
+## Deployment boundary
 
-```bash
-python3 tests/run_integration.py
-python3 tests/run_examples.py
-python3 tests/run_lifecycle.py
-python3 tests/run_world_security.py
-python3 tests/run_world_worker.py
-```
+The existing recipe targets Ubuntu 24.04/Python 3.12, systemd and a separately
+installed controller. The API runs as the unprivileged `civicrm_bridge_api` user
+on `127.0.0.1:8765` behind an existing HTTPS reverse proxy, with one backend token
+and exact sudo grants. Browsers do not receive the token. `api/install.py` prepares
+review files; installation and template activation require operator action.
 
-The engine tests use disposable worlds, isolated user homes with a shared mod installation, and loopback-only ports. The example checks compare the published account response fixtures to real engine results and lifecycle response fixtures to the controller with a fake service. The lifecycle suite separately checks real process transitions and systemd safety fixtures. They do not control the live development service. Also check login, role updates, withdrawal, and readmission with a real client in the development world.
+**Provisional host layout:** the development setup describes Luanti 5.17.0 with
+LuaJIT/Minetest Game, `luanti-dev.service` running as `ben`, and UDP port 30000.
+The source checkout is `/home/ben/.minetest/mods/civicrm_bridge`, server config
+`/home/ben/luanti-dev/server.conf`, legacy world `/home/ben/luanti-dev/world`, and
+private copies under `/home/ben/luanti-dev/instances`. These are recipe assumptions,
+not portable defaults or proof of the current remote installation.
 
-Version only this mod directory. Keep the surrounding world, authentication databases, mod storage, inbox, outbox, and real credentials out of Git. The private archive is [Stewie23/luanti-connect](https://github.com/Stewie23/luanti-connect); pushes use a repository-specific deploy key and the secret-scan hook described in [archiving](tools/ARCHIVING.md). There is no automatic scheduled push. To stop enforcing the bridge whitelist, disable the mod in `world.mt` and restart the service; account and privilege changes already applied remain in the world.
+Enable `load_mod_civicrm_bridge = mods/civicrm_bridge` in each selected world's
+`world.mt`. The shared mod must be available to the Luanti service user; do not
+also install it as a world-local mod. The mod derives inbox/outbox paths from
+`core.get_worldpath()`. The service user owns runtime writes; integration writers
+receive inbox publication and read-only outbox access, not writes to world
+settings, databases, receipts or checkpoints. Pending input can contain passwords.
 
-The existing mod directory remains owned by `ben`. From that directory, the dedicated SSH account can use `git -c safe.directory="$PWD" status` (and the same prefix for other Git commands). This trusts only this repository for that invocation and leaves global Git settings unchanged.
+Controller/API snapshots are root-owned; editing the checkout does not upgrade
+them. The shared mod checkout remains trusted code executed by the service user.
+See [lifecycle trust and upgrades](lifecycle/README.md#trust-boundary-and-upgrades)
+and the HTTPS guide before changing permissions or activating a snapshot.
+
+## Account behavior and local examples
+
+`sync_accounts` creates bridge-owned accounts and synchronizes role/admission.
+Participants receive `interact` and `shout`; facilitators also receive `fly`,
+`fast` and `teleport`. Demotion revokes those managed privileges while preserving
+unrelated manual grants. Existing unmanaged accounts, case collisions and the
+configured administrator are protected.
+
+Only admitted bridge accounts within any stored access window, plus the
+administrator configured by Luanti's `name`, may join. Unknown players cannot
+self-register. Withdrawal/expiry disconnects players and preserves passwords and
+data. Initial passwords are ignored for existing managed accounts.
+
+The [numbered examples](examples/README.md) and `tools/simulate.py` demonstrate
+legacy account v1 only; the simulator defaults to the development world's
+runtime. Use a disposable world and explicit `--runtime-dir`. It atomically
+publishes one job, waits up to 15 seconds by default and prints a summary.
+Exit codes are 0 success, 1 partial/error result, 2 input/filesystem error and
+3 timeout. Timeout leaves queued input intact. Portal v2 contracts and exact-byte
+retry rules are in the integration guide; do not use the v1 simulator for v2 jobs.
+
+## Known limitations
+
+- One world/game runs per configured service/port; overlapping enabled instance
+  windows are rejected. Account imports do not start a stopped game.
+- Durable acceptance is asynchronous. Account batches can partially succeed;
+  uncertain outcomes require inspection before new dependent changes.
+- Archival stops and permanently disables a copy while retaining its save. There
+  is no save-deletion API or automatic receipt/archived-save expiry.
+- No password reset, account deletion/rename, roster query or arbitrary privilege
+  API exists. Template replacement starts fresh player progress; passwords changed
+  in an older copy are not transferred by the portal.
+
+## Verification and repository boundaries
+
+Existing Linux checks use disposable worlds/state and loopback ports, not the
+live development service: `tests/run_integration.py`, `tests/run_examples.py`,
+`tests/run_lifecycle.py` (`--mock-only` skips engine processes),
+`tests/run_world_security.py`, `tests/run_world_worker.py`, `tests/run_templates.py`,
+`tests/run_instances.py`, `tests/run_world_catalogue.py` and `tests/run_upgrade.py`.
+API dependencies and checks are described in the HTTPS guide. Run these only in
+their supported environment; their presence is not a claim that a deployment was
+tested. Real-client login/admission checks remain an operator validation step.
+
+Keep worlds, authentication databases, mod storage, runtime queues, receipts and
+credentials out of Git. Back up runtime data and private API/registry state
+separately. The code archive and contributor secret checks are described in
+[GitHub archiving](tools/ARCHIVING.md); there is no automatic scheduled push.
+Disabling the mod and restarting removes whitelist enforcement but does not undo
+account/privilege changes already applied.

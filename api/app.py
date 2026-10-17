@@ -11,6 +11,8 @@ from api.contract import ACCOUNT_MAX, LIFECYCLE_MAX, JOB_ID, validate_accounts, 
 from api.jobs import Conflict, Jobs
 from api.security import authenticated
 from api.worlds import catalogue
+from lifecycle.templates import catalogue as template_catalogue
+from lifecycle.instances import runtime_for
 
 LOG = logging.getLogger('civicrm_bridge_api')
 
@@ -64,8 +66,11 @@ def create_app(config, runner=None, background=True):
             return error(503, 'state_unavailable')
 
     async def submit(request, kind, world):
-        if kind == 'accounts' and world not in config['worlds']:
-            return error(404, 'unknown_world')
+        if kind == 'accounts':
+            try:
+                runtime_for(config, world)
+            except (ValueError, KeyError):
+                return error(404, 'unknown_instance')
         content_types = request.headers.getlist('content-type')
         if len(content_types) != 1 or content_types[0].split(';', 1)[0].strip().lower() != 'application/json':
             return error(415, 'unsupported_media_type')
@@ -90,8 +95,13 @@ def create_app(config, runner=None, background=True):
         return JSONResponse(result, status_code=status, headers={'Location': result['result_url']})
 
     async def retrieve(kind, world, job_id):
-        if (kind == 'accounts' and world not in config['worlds']) or not JOB_ID.fullmatch(job_id):
+        if not JOB_ID.fullmatch(job_id):
             return error(404, 'unknown_job')
+        if kind == 'accounts':
+            try:
+                runtime_for(config, world, allow_archived=True)
+            except (ValueError, KeyError):
+                return error(404, 'unknown_instance')
         value = await asyncio.to_thread(app.state.jobs.get, kind, world, job_id)
         return JSONResponse(value) if value else error(404, 'unknown_job')
 
@@ -101,6 +111,14 @@ def create_app(config, runner=None, background=True):
             value = await asyncio.to_thread(catalogue, config)
         except (OSError, ValueError, TypeError):
             return error(503, 'world_catalogue_unavailable')
+        return JSONResponse(value)
+
+    @app.get('/v1/world-templates')
+    async def list_templates():
+        try:
+            value = await asyncio.to_thread(template_catalogue, config)
+        except (OSError, ValueError, KeyError, sqlite3.Error):
+            return error(503, 'template_catalogue_unavailable')
         return JSONResponse(value)
 
     @app.post('/v1/worlds/{world_id}/accounts/jobs')

@@ -11,6 +11,7 @@ import stat
 import subprocess
 import tempfile
 import time
+import re
 
 
 SERVICE = "luanti-dev.service"
@@ -29,6 +30,11 @@ CONFIGURATION = {
     "user_home": "/home/ben",
     "server_config": "/home/ben/luanti-dev/server.conf",
     "logfile": "/home/ben/luanti-dev/server.log",
+    "templates": {},
+    "template_revisions": {},
+    "instances_root": "/home/ben/luanti-dev/instances",
+    "instance_registry": "/var/lib/civicrm-worldctl/instances",
+    "api_user": "civicrm_bridge_api",
     "worlds": {
         "dev": "/home/ben/luanti-dev/world",
         "test": "/home/ben/luanti-dev/worlds/test",
@@ -43,6 +49,13 @@ def run(*arguments):
 
 def json_bytes(value):
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def configuration_for_upgrade(existing):
+    configuration = dict(CONFIGURATION)
+    for key in ('templates', 'template_revisions'):
+        configuration[key] = existing.get(key, {})
+    return configuration
 
 
 def check_path(path):
@@ -313,14 +326,17 @@ def main():
             raise RuntimeError(f"Required executable not found: {required}")
     source = Path(__file__).resolve().parent
     files = {}
-    for name in ("controller.py", "worldctl.py", "launch.py"):
+    for name in ("controller.py", "errors.py", "docker_backend.py", "worldctl.py", "launch.py", "templates.py", "instances.py", "instance_contract.py"):
         content = (source / name).read_bytes()
         compile(content, name, "exec")  # Validate syntax without executing source.
         files[LIB / name] = (content, 0o644)
+    publisher = (source.parent / 'tools' / 'publish_template.py').read_bytes()
+    compile(publisher, 'publish_template.py', 'exec')
+    files[LIB / 'publish_template.py'] = (publisher, 0o644)
     files[CONFIG] = (json_bytes(CONFIGURATION), 0o644)
     files[WRAPPER] = (b'#!/bin/sh\nexec /usr/bin/python3 -I /usr/local/lib/civicrm-worldctl/worldctl.py "$@"\n', 0o755)
     files[DROPIN] = (b"[Service]\nExecStart=\nExecStart=/usr/bin/python3 -I /usr/local/lib/civicrm-worldctl/launch.py\nTimeoutStopSec=30s\n", 0o644)
-    commands = ["status", "stop_world", "start_world dev", "start_world test", "switch_world dev", "switch_world test"]
+    commands = ["status", "stop_world", "start_world dev", "start_world test", "switch_world dev", "switch_world test", "instance", "reconcile_instances"]
     sudoers = "# Managed by civicrm-worldctl installer; exact commands only.\n"
     sudoers += "codex_civicrmbridge ALL=(root) NOPASSWD: " + ", ".join(str(WRAPPER) + " " + command for command in commands) + "\n"
     files[SUDOERS] = (sudoers.encode(), 0o440)
@@ -336,12 +352,17 @@ def main():
             secure_existing(path)
             if not reinstall or hashlib.sha256(path.read_bytes()).hexdigest() != previous.get(str(path)):
                 raise RuntimeError(f"Refusing to overwrite unrecognized or locally modified file: {path}")
-        elif reinstall:
+        elif reinstall and str(path) in previous:
             raise RuntimeError(f"Managed installation file is missing: {path}")
+    if reinstall:
+        configuration = configuration_for_upgrade(json.loads(CONFIG.read_text()))
+        files[CONFIG] = (json_bytes(configuration), 0o644)
     check_path(STATE)
     if STATE.exists():
         secure_existing(STATE)
-        if not reinstall or json.loads(STATE.read_text()).get("world_id") not in CONFIGURATION["worlds"]:
+        selected = json.loads(STATE.read_text()).get("world_id")
+        registered = isinstance(selected, str) and re.fullmatch(r'g[0-9a-z]{26}', selected) and (Path(CONFIGURATION['instance_registry']) / (selected + '.json')).is_file()
+        if not reinstall or (selected not in CONFIGURATION["worlds"] and not registered):
             raise RuntimeError("Unrecognized state file; refusing to reset selected world")
     elif reinstall:
         raise RuntimeError("State file is missing; refusing to reset selected world")
@@ -367,6 +388,11 @@ def main():
             permissions += "\n\n" + run("/usr/bin/getfacl", "-R", "-P", "-p", world)
     atomic_write(backups / "permissions.acl", (permissions + "\n").encode(), 0o600)
     prepare_worlds()
+    for directory in (base / 'templates', Path(CONFIGURATION['instances_root']), Path(CONFIGURATION['instance_registry'])):
+        check_path(directory)
+        directory.mkdir(mode=0o755, exist_ok=True)
+        if not directory.is_dir() or directory.stat().st_uid != 0 or directory.stat().st_mode & 0o022:
+            raise RuntimeError('Instance and template roots must be root-owned and not writable by other users')
     originals = {}
     for path in files:
         originals[path] = (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)) if path.exists() else None

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +65,16 @@ class Fixture(unittest.TestCase):
         self.secret = (self.base / 'delivery').read_text().strip()
         self.headers = {'Authorization': 'Bearer ' + self.secret, 'Content-Type': 'application/json'}
         self.calls = []
+        # Existing transport fixtures use short aliases for synthetic private
+        # instances. Filesystem registry validation is covered by run_instances.
+        def resolve(config, identifier, allow_archived=False):
+            if identifier not in config['worlds']:
+                raise ValueError('Unknown private instance')
+            return config['worlds'][identifier]
+        for target in ('api.app.runtime_for', 'api.jobs.runtime_for'):
+            mocked = patch(target, side_effect=resolve)
+            mocked.start()
+            self.addCleanup(mocked.stop)
 
     def runner(self, arguments):
         self.calls.append(arguments)
@@ -263,6 +274,85 @@ class ApiTests(Fixture):
             self.assertEqual(client.post('/v1/lifecycle/jobs', content=lifecycle('status', 'stop_world'), headers=self.headers).status_code, 409)
 
 
+class InstanceApiTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        from lifecycle.instances import runtime_for as resolve
+        from lifecycle.templates import regular
+        from tools.publish_template import publish
+        from contextlib import closing
+        import sqlite3
+        self.identifier = 'g' + '0' * 26
+        roots = self.base / 'instances'
+        records = self.base / 'registry'
+        records.mkdir()
+        runtime = roots / self.identifier / 'civicrm_bridge'
+        for name in ('inbox', 'outbox'):
+            (runtime / name).mkdir(parents=True)
+        self.record_path = records / (self.identifier + '.json')
+        self.record = {'instance_id': self.identifier, 'archived': False, 'enabled': True,
+                       'access_window': {'starts_at': 1, 'ends_at': 2**31}, 'generation': 1}
+        self.record_path.write_bytes(encoded(self.record))
+        source = self.base / 'clean'
+        source.mkdir()
+        (source / 'world.mt').write_text('gameid = minetest\nload_mod_civicrm_bridge = mods/civicrm_bridge\n')
+        with closing(sqlite3.connect(source / 'map.sqlite')) as db:
+            db.execute('CREATE TABLE blocks (pos INTEGER PRIMARY KEY, data BLOB)')
+        self.manifest = publish(source, self.base / 'published', 'classroom', 'Classroom')
+        self.config.update(instances_root=str(roots), instance_registry=str(records), templates={'classroom': str(self.base / 'published')})
+        for target in ('api.app.runtime_for', 'api.jobs.runtime_for'):
+            mocked = patch(target, side_effect=resolve)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        def fixture_record(path):
+            regular(path, {os.geteuid()})
+            return json.loads(Path(path).read_text())
+        reader = patch('lifecycle.instances.trusted_json', side_effect=fixture_record)
+        reader.start()
+        self.addCleanup(reader.stop)
+        self.addCleanup(lambda: (self.base / 'published').chmod(0o700))
+
+    def runner(self, arguments, raw=None):
+        self.calls.append(arguments)
+        return {'ok': True, 'state': 'stopped'}
+
+    def test_template_catalogue_is_authenticated_and_templates_cannot_receive_accounts(self):
+        with TestClient(self.app()) as client:
+            self.assertEqual(client.get('/v1/world-templates').status_code, 401)
+            response = client.get('/v1/world-templates', headers=self.headers)
+            self.assertEqual(response.json(), {'version': 1, 'templates': [
+                {'template_id': 'classroom', 'name': 'Classroom', 'revision': self.manifest['revision']}]})
+            for forbidden in ('classroom', 'dev', 'test'):
+                self.assertEqual(client.post(f'/v1/worlds/{forbidden}/accounts/jobs', content=encoded(account()), headers=self.headers).status_code, 404)
+        self.assertEqual(self.calls, [])
+
+    def test_accounts_are_delivered_only_to_registered_copy_and_archival_blocks_new_jobs(self):
+        with TestClient(self.app()) as client:
+            raw = encoded(account())
+            accepted = client.post(f'/v1/worlds/{self.identifier}/accounts/jobs', content=raw, headers=self.headers)
+            self.assertEqual(accepted.status_code, 202)
+            client.app.state.jobs.tick_accounts()
+            runtime = Path(self.config['instances_root']) / self.identifier / 'civicrm_bridge'
+            self.assertEqual((runtime / 'inbox/api-demo.json').read_bytes(), raw)
+            self.record['archived'] = True
+            self.record_path.write_bytes(encoded(self.record))
+            self.assertEqual(client.post(f'/v1/worlds/{self.identifier}/accounts/jobs', content=encoded(account('new')), headers=self.headers).status_code, 404)
+            self.assertEqual(client.get(accepted.json()['result_url'], headers=self.headers).status_code, 200)
+
+    def test_v2_lifecycle_contract_uses_restricted_stdin_operation_and_exact_replay(self):
+        value = {'version': 2, 'job_id': 'instance-create', 'operation': 'create_instance', 'instance_id': self.identifier,
+                 'template_id': 'classroom', 'template_revision': self.manifest['revision'], 'access_window': {'starts_at': 1, 'ends_at': 2}}
+        with TestClient(self.app()) as client:
+            response = client.post('/v1/lifecycle/jobs', content=encoded(value), headers=self.headers)
+            self.assertEqual(response.status_code, 202)
+            client.app.state.jobs.tick_lifecycle()
+            completed = client.get(response.json()['result_url'], headers=self.headers).json()
+            self.assertEqual(completed['result']['version'], 2)
+            self.assertEqual(completed['result']['instance_id'], self.identifier)
+            self.assertIn([*world_worker.COMMAND, 'instance'], self.calls)
+            self.assertEqual(client.post('/v1/lifecycle/jobs', content=encoded(value), headers=self.headers).status_code, 200)
+
+
 class RecoveryTests(Fixture):
     def jobs(self):
         return Jobs(self.config, self.runner)
@@ -386,11 +476,13 @@ class InstallerTests(Fixture):
         from api.install import main
         output = self.base / 'prepared'
         with patch('sys.argv', ['install.py', '--hostname', 'bridge.example.org', '--output', str(output)]), \
+                patch('os.geteuid', return_value=1000), patch('pwd.getpwnam', return_value=SimpleNamespace(pw_uid=1000)), \
                 patch('subprocess.run') as run:
             main()
         run.assert_not_called()
         self.assertEqual(len(list(output.iterdir())), 6)
-        with patch('sys.argv', ['install.py', '--hostname', 'bridge.example.org', '--output', str(output)]):
+        with patch('sys.argv', ['install.py', '--hostname', 'bridge.example.org', '--output', str(output)]), \
+                patch('os.geteuid', return_value=1000), patch('pwd.getpwnam', return_value=SimpleNamespace(pw_uid=1000)):
             with self.assertRaises(FileExistsError):
                 main()
 
@@ -400,7 +492,7 @@ class EngineTests(Fixture):
     def test_v2_api_time_boundaries_late_job_and_restart(self):
         from run_integration import Harness
         harness = Harness(shutil.which('luanti'), ROOT, self.base,
-                          Path('/home/ben/.minetest/games/minetest_game'))
+                          Path(os.environ.get('BRIDGE_TEST_GAME', '/home/ben/.minetest/games/minetest_game')))
         self.addCleanup(shutil.rmtree, harness.path)
         self.addCleanup(harness.stop)
         harness.start()
@@ -419,7 +511,7 @@ class EngineTests(Fixture):
                 if result['state'] == 'completed':
                     break
                 time.sleep(.05)
-            self.assertEqual(result['result']['version'], 2)
+            self.assertEqual(result['result']['version'], 2, result)
             self.assertEqual(result['result']['accounts'][0]['status'], 'created')
             self.assertTrue(harness.snapshot('api_demo')['denial'])
             harness.control_command('set_time', timestamp=start)
@@ -458,7 +550,7 @@ class EngineTests(Fixture):
     def test_api_import_preserves_password_and_enforces_withdrawal(self):
         from run_integration import Harness
         harness = Harness(shutil.which('luanti'), ROOT, self.base,
-                          Path('/home/ben/.minetest/games/minetest_game'))
+                          Path(os.environ.get('BRIDGE_TEST_GAME', '/home/ben/.minetest/games/minetest_game')))
         self.addCleanup(shutil.rmtree, harness.path)
         self.addCleanup(harness.stop)
         harness.start()
@@ -473,7 +565,7 @@ class EngineTests(Fixture):
                     if result['state'] == 'completed':
                         return result['result']
                     time.sleep(.05)
-                self.fail('Disposable engine account job did not complete')
+                self.fail('Disposable engine account job did not complete: ' + str(result))
             result = submit(account())
             self.assertEqual(result['accounts'][0]['status'], 'created')
             harness.control_command('set_password', username='api_demo', password='FictitiousPlayerChanged!')

@@ -1,6 +1,8 @@
-# World-control examples
+# Legacy world-control v1 examples
 
 **The files in `proposed-requests/` are now implemented input for the local JSON worker.** The directory name is retained for existing links. Run `python3 tools/world_worker.py examples/lifecycle/proposed-requests/status.json` from the repository. See the [worker contract and recovery rules](../../tools/WORLD_WORKER.md). Do not publish lifecycle requests in the bridge inbox or pass them to `tools/simulate.py`. The privileged controller still takes the exact CLI arguments below. Response files show its output without the worker's added `version` and `job_id`; PIDs are illustrative.
+
+These are legacy maintenance fixtures, not portal private-game requests. The worker also implements [lifecycle v2](../../docs/INTEGRATION.md#private-instance-lifecycle-v2), dispatched through the fixed `instance` command with validated JSON on stdin. Its six operations create/configure/start/stop/inspect/archive private copies; creation from a published template is implemented. Host-specific paths and grants are **Provisional** until the operator installs the reviewed upgrade.
 
 ## Actions
 
@@ -15,7 +17,7 @@
 
 The envelope contains integer `version: 1`, a correlation `job_id`, `operation`, and `world_id` for start/switch. The worker strictly validates fields, maps them to fixed argument lists, and records durable receipts. Existing SSH/account and exact sudo grants authorize invocation. `status` and `stop_world` act on the one service and forbid a world ID; stop does not accept a target world parameter.
 
-`dev` and `test` are currently the only allowed IDs. The installed root-owned configuration maps IDs to paths. This permits selecting existing worlds, not creating them. See [installation and rollback](../../lifecycle/README.md).
+`dev` and `test` are the only IDs accepted by these v1 worker start/switch requests. The installed root-owned configuration maps them to paths. These operations select existing worlds; private-copy creation uses v2 instead. See [installation and rollback](../../lifecycle/README.md). Avoid legacy maintenance while enabled private-game schedules are being reconciled.
 
 ## Successful outputs
 
@@ -37,7 +39,7 @@ No-op examples: [start the same world](responses/start-same-world.json), [switch
 
 ## Errors and recovery
 
-An implemented controller error has `ok: false` and an `error` object containing `code`, `message`, and optional `details`. The generic `configuration_error` branch omits `details`; treat its absence as an empty object. Do not branch on the prose message. Normal controller success exits 0 and errors exit 1. Argument parsing errors exit 2; sudo denial and command-launch failures may return plain stderr rather than JSON, so the future worker must handle both process errors and JSON outcomes.
+An implemented controller error has `ok: false` and an `error` object containing `code`, `message`, and optional `details`. The generic `configuration_error` branch omits `details`; treat its absence as an empty object. Do not branch on the prose message. Normal controller success exits 0 and errors exit 1. Argument parsing errors exit 2; sudo denial and command-launch failures may return plain stderr rather than JSON. The implemented worker handles launch failures and non-JSON process outcomes without returning raw stderr.
 
 | Code | Worker response |
 | --- | --- |

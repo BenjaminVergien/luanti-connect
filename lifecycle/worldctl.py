@@ -7,7 +7,8 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, '/usr/local/lib/civicrm-worldctl')
-from controller import LifecycleController, LifecycleError, SystemdBackend, trusted_json
+from controller import LifecycleController, LifecycleError, configured_backend, trusted_json
+from instances import InstanceController, managed_config
 
 CONFIG = Path('/etc/civicrm-worldctl/config.json')
 STATE = Path('/var/lib/civicrm-worldctl/state.json')
@@ -19,6 +20,8 @@ def main():
     operations = parser.add_subparsers(dest='operation', required=True)
     operations.add_parser('status')
     operations.add_parser('stop_world')
+    operations.add_parser('instance')
+    operations.add_parser('reconcile_instances')
     for operation in ('start_world', 'switch_world'):
         operations.add_parser(operation).add_argument('world_id')
     args = parser.parse_args()
@@ -27,9 +30,27 @@ def main():
             raise LifecycleError('permission_denied', 'Run the installed command through its restricted sudo rule.')
         config = trusted_json(CONFIG)
         trusted_json(STATE)
-        controller = LifecycleController(config, SystemdBackend(config), STATE, LOCK)
-        method = getattr(controller, args.operation)
-        result = method(args.world_id) if hasattr(args, 'world_id') else method()
+        if args.operation in ('instance', 'reconcile_instances'):
+            controller = InstanceController(config, configured_backend(config), STATE, LOCK)
+            if args.operation == 'instance':
+                raw = sys.stdin.buffer.read(16385)
+                if len(raw) > 16384:
+                    raise ValueError('Oversized instance request')
+                from instance_contract import validate, decode
+                request = decode(raw)
+                validate(request)
+                result = controller.handle(request)
+            else:
+                result = controller.reconcile()
+        else:
+            if 'instance_registry' in config:
+                config = managed_config(config)
+                from instances import registry
+                if hasattr(args, 'world_id') and args.world_id in registry(config):
+                    raise ValueError('Managed instances require versioned instance operations')
+            controller = LifecycleController(config, configured_backend(config), STATE, LOCK)
+            method = getattr(controller, args.operation)
+            result = method(args.world_id) if hasattr(args, 'world_id') else method()
         print(json.dumps(result, indent=2))
         return 0
     except LifecycleError as error:

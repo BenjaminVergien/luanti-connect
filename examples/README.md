@@ -2,7 +2,9 @@
 
 Start with the [integration contract](../docs/INTEGRATION.md). All passwords, identities and controller PIDs in these files are fictitious. Account response fixtures assume a fresh world with the shared mod enabled and the administrator configured as `ben`. An existing world can instead return `updated`, `unchanged` or a conflict. Never use these passwords for real participants.
 
-## Runnable account jobs
+**Implemented legacy fixtures:** the numbered requests are account v1, and `lifecycle/` contains v1 maintenance requests for `dev`/`test`. Their historical paths remain valid. The portal uses [timed account v2](../docs/INTEGRATION.md#account-request-v1v2) and [private-instance lifecycle v2](../docs/INTEGRATION.md#private-instance-lifecycle-v2) through HTTPS; see those sections for current payloads. `tools/simulate.py` only accepts v1. A legacy world ID or template ID is not a valid HTTPS account target.
+
+## Runnable legacy account v1 jobs
 
 Run the numbered root-level files in order. Each has its own ID. Their [expected results](expected/) describe the first run in a fresh world.
 
@@ -19,7 +21,7 @@ Run the numbered root-level files in order. Each has its own ID. Their [expected
 
 In 03, withdrawal does not remove role privileges. In 04, the explicit participant role performs the demotion. In 06, the replacement example password never becomes the account's password; any password changed by the player remains intact. Updates omit the password unless demonstrating that rule.
 
-For the dedicated test world, first select it explicitly:
+For the dedicated legacy test world, first select it explicitly. **Provisional host paths:** this sequence assumes the existing `ben`/systemd recipe and no competing private-game schedule. It is not the portal's allocation workflow:
 
 ```bash
 sudo -n /usr/local/sbin/civicrm-worldctl switch_world test

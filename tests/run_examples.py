@@ -88,7 +88,7 @@ class FixtureBackend:
                 'world_path': self.config['worlds'].get(self.current),
                 'ready': self.current is not None and self.ready}
 
-    def start(self):
+    def start(self, world_id=None, world_path=None):
         self.current = read(self.selection)['world_id']
         self.ready = self.current != self.fail_world
 

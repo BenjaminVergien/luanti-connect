@@ -1,4 +1,21 @@
 #!/bin/sh
 set -eu
 root=$(git rev-parse --show-toplevel)
-exec /usr/bin/python3 -I "$root/tools/check_archive.py" --pre-push
+scanner=$(git config --local --path --get bridge.gitleaksPath || true)
+if [ -n "$scanner" ]; then
+    scanner_dir=$(dirname "$scanner")
+    if command -v cygpath >/dev/null 2>&1; then
+        scanner_dir=$(cygpath -u "$scanner_dir")
+    fi
+    PATH="$scanner_dir:$PATH"
+    export PATH
+fi
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(sys.version_info.major != 3)' >/dev/null 2>&1; then
+    exec python3 -I "$root/tools/check_archive.py" --pre-push
+elif command -v python >/dev/null 2>&1 && python -c 'import sys; sys.exit(sys.version_info.major != 3)' >/dev/null 2>&1; then
+    exec python -I "$root/tools/check_archive.py" --pre-push
+elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys; sys.exit(sys.version_info.major != 3)' >/dev/null 2>&1; then
+    exec py -3 -I "$root/tools/check_archive.py" --pre-push
+fi
+echo 'Archive blocked: Python 3 is required.' >&2
+exit 1

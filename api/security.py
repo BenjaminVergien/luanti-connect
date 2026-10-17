@@ -38,12 +38,12 @@ def read_regular(path, limit, owners=None, forbidden=0o022):
         return raw
 
 
-def atomic_private(path, raw, mode=0o600, owner=None, group=None):
+def atomic_private(path, raw, mode=0o600, owner=None, group=None, existing_limit=1024 * 1024):
     """Replace an operator-managed file only inside trusted parent directories."""
     path = Path(path)
     check_parents(path)
     if path.exists() or path.is_symlink():
-        read_regular(path, 1024 * 1024, {0, os.geteuid()}, forbidden=0o022)
+        read_regular(path, existing_limit, {0, os.geteuid()}, forbidden=0o022)
     fd, name = tempfile.mkstemp(prefix='.bridge-', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as output:

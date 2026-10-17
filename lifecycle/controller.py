@@ -13,15 +13,26 @@ import tempfile
 import time
 
 
-class LifecycleError(Exception):
-    def __init__(self, code, message, details=None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.details = details or {}
+try:
+    from .errors import LifecycleError
+except ImportError:
+    from errors import LifecycleError
 
 
-def check_trusted_permissions(descriptor, trusted_uids, allow_sticky=False):
+def configured_backend(config):
+    mode = config.get('backend', 'systemd')
+    if mode == 'systemd':
+        return SystemdBackend(config)
+    if mode == 'docker':
+        try:
+            from .docker_backend import DockerBackend
+        except ImportError:
+            from docker_backend import DockerBackend
+        return DockerBackend(config)
+    raise LifecycleError('invalid_configuration', 'Unknown configured engine backend.')
+
+
+def check_trusted_permissions(descriptor, trusted_uids, allow_sticky=False, path_only=False):
     """Check effective Linux ACL writes, not just the ACL mask in st_mode."""
     metadata = os.fstat(descriptor)
     if metadata.st_uid not in trusted_uids:
@@ -32,7 +43,8 @@ def check_trusted_permissions(descriptor, trusted_uids, allow_sticky=False):
         return
     for attribute in ("system.posix_acl_access", "system.posix_acl_default"):
         try:
-            raw = os.getxattr(descriptor, attribute)
+            target = f'/proc/self/fd/{descriptor}' if path_only else descriptor
+            raw = os.getxattr(target, attribute)
         except OSError as error:
             if error.errno not in (errno.ENODATA, errno.ENOTSUP):
                 raise
@@ -50,18 +62,23 @@ def check_trusted_permissions(descriptor, trusted_uids, allow_sticky=False):
 
 
 @contextmanager
-def trusted_world_directory(path, trusted_uids):
-    """Hold a no-follow world descriptor after checking every ancestor."""
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+def trusted_world_directory(path, trusted_uids, metadata_only=False):
+    """Hold a no-follow descriptor, optionally without directory listing access.
+
+    Linux O_PATH permits traverse-only ancestors. ACL reads use the held inode's
+    procfs reference because fgetxattr does not accept O_PATH descriptors.
+    """
+    path_only = metadata_only and hasattr(os, 'O_PATH')
+    flags = (os.O_PATH if path_only else os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     descriptor = os.open("/", flags)
     try:
-        check_trusted_permissions(descriptor, trusted_uids, allow_sticky=True)
+        check_trusted_permissions(descriptor, trusted_uids, allow_sticky=True, path_only=path_only)
         for index, component in enumerate(path.parts[1:]):
             child = os.open(component, flags, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
             check_trusted_permissions(descriptor, trusted_uids,
-                                      allow_sticky=index < len(path.parts) - 2)
+                                      allow_sticky=index < len(path.parts) - 2, path_only=path_only)
         yield descriptor
     finally:
         os.close(descriptor)
@@ -163,7 +180,7 @@ class SystemdBackend:
         return {"active": active, "pid": pid, "world_path": world_path,
                 "ready": ready, "transitioning": bool(transitioning)}
 
-    def start(self):
+    def start(self, world_id=None, world_path=None):
         self.ready_instance = None
         self._run(["/usr/bin/systemctl", "start", self.service], timeout=40)
 
@@ -180,7 +197,7 @@ class LifecycleController:
         self.lock_path = Path(lock_path)
         self.timeout = timeout
         self.poll_interval = poll_interval
-        if not isinstance(config.get("worlds"), dict) or not config["worlds"]:
+        if not isinstance(config.get("worlds"), dict) or (not config["worlds"] and config.get('backend') != 'docker'):
             raise LifecycleError("invalid_configuration", "No worlds are configured.")
         resolved = set()
         for name, path in config["worlds"].items():
@@ -212,6 +229,8 @@ class LifecycleController:
         if self.state_path.is_symlink():
             raise LifecycleError("unsafe_state", "Lifecycle state cannot be a symlink.")
         world_id = load_json(self.state_path).get("world_id")
+        if world_id is None and self.config.get('backend') == 'docker':
+            return None
         if world_id not in self.config["worlds"]:
             raise LifecycleError("invalid_state", "Selected world is not configured.")
         return world_id
@@ -281,10 +300,13 @@ class LifecycleController:
             raise LifecycleError("invalid_world", "World uses a different game.")
         if settings.get("load_mod_civicrm_bridge") != "mods/civicrm_bridge":
             raise LifecycleError("invalid_world", "World must explicitly enable the shared bridge.")
-        shared = Path(self.config["user_home"]) / ".minetest" / "mods" / "civicrm_bridge"
+        shared = (Path(self.config['docker']['mod_path']) if self.config.get('backend') == 'docker'
+                  else Path(self.config["user_home"]) / ".minetest" / "mods" / "civicrm_bridge")
         if not (shared / "mod.conf").is_file() or not Path(self.config["server_config"]).is_file():
             raise LifecycleError("invalid_world", "Shared bridge or server configuration is missing.")
-        if not Path(self.config["engine"]).is_file() or not os.access(self.config["engine"], os.X_OK):
+        if self.config.get('backend') == 'docker':
+            self.backend.validate_installation()
+        elif not Path(self.config["engine"]).is_file() or not os.access(self.config["engine"], os.X_OK):
             raise LifecycleError("invalid_configuration", "Configured Luanti executable is unavailable.")
         return path
 
@@ -353,7 +375,7 @@ class LifecycleController:
             self._wait_stopped()
         try:
             self._select(world_id)
-            self.backend.start()
+            self.backend.start(world_id, str(self.config['worlds'][world_id]))
             result = self._wait_ready(world_id)
         except (LifecycleError, OSError) as error:
             cause = getattr(error, "code", "state_error")
@@ -364,7 +386,7 @@ class LifecycleController:
                 self._select(previous)
                 if initial["active"]:
                     self.validate_world(previous)
-                    self.backend.start()
+                    self.backend.start(previous, str(self.config['worlds'][previous]))
                     self._wait_ready(previous)
                 rollback = "restored" if initial["active"] else "selection_restored"
             except (LifecycleError, OSError):

@@ -32,3 +32,9 @@ state.json
 *.db-*
 *.log
 gitleaks-report*
+/.development/
+/deployment-bundles/
+/local-config/
+/certificates/
+*.zip
+*.tar.gz

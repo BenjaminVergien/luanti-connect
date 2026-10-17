@@ -22,7 +22,7 @@ from run_lifecycle import create_fixture, NeverReadyBackend
 class WorldSecurityTests(unittest.TestCase):
     def setUp(self):
         self.artifacts, self.config, self.state, self.lock = create_fixture(
-            Path.home(), "/usr/bin/luanti", Path("/home/ben/.minetest/games/minetest_game"))
+            Path.home(), sys.executable, Path(os.environ.get('BRIDGE_TEST_GAME', '/home/ben/.minetest/games/minetest_game')))
         self.addCleanup(shutil.rmtree, self.artifacts)
         self.world = Path(self.config["worlds"]["test"])
         self.settings = self.world / "world.mt"

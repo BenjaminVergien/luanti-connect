@@ -1,5 +1,16 @@
 # HTTPS API: manual setup and backend integration
 
+**Implemented:** Luanti Portal uses this API for private-instance lifecycle v2
+and timed account v2 jobs. The `/v1/` route prefix and job envelopes remain v1;
+payload/result versions are separate. See the [integration contract](INTEGRATION.md)
+for component responsibilities, schemas and the approval-to-game workflow.
+
+**Provisional / moving parts:** the installation below is a host-specific
+Ubuntu/systemd recipe, not evidence that a remote service is upgraded. Steps 1-5
+prepare the base service; portal use also requires the private-game controller/API
+upgrade and published templates described under API usage. A portal-provisioned
+Hetzner VM with a verified Docker engine does not yet contain this deployment.
+
 The API accepts account imports and world lifecycle jobs from one trusted
 backend. Every API request requires one bearer token. Store it in the backend's
 secret configuration; the browser never receives it. Luanti does not exchange
@@ -13,9 +24,9 @@ or generate tokens. Keep deployment configuration and secrets outside Git.
 ## Architecture and prerequisites
 
 ```text
-browser -> frontend backend (holds token) -> existing HTTPS proxy
+browser -> Luanti Portal backend (holds token) -> existing HTTPS proxy
         -> 127.0.0.1:8765 (API, running as civicrm_bridge_api)
-           |-> selected world's account inbox/outbox
+           |-> registered private instance's account inbox/outbox
            |-> exact sudo command -> civicrm-worldctl
 ```
 
@@ -96,6 +107,7 @@ sudo install -d -o root -g root -m 0755 \
   /usr/local/lib/civicrm-bridge-api \
   /usr/local/lib/civicrm-bridge-api/api \
   /usr/local/lib/civicrm-bridge-api/tools \
+  /usr/local/lib/civicrm-bridge-api/lifecycle \
   /etc/civicrm-bridge-api
 sudo install -d -o civicrm_bridge_api -g civicrm_bridge_api -m 0700 \
   /var/lib/civicrm-bridge-api
@@ -103,6 +115,10 @@ sudo install -d -o civicrm_bridge_api -g civicrm_bridge_api -m 0700 \
 for file in __init__.py security.py contract.py tokens.py jobs.py worlds.py app.py serve.py; do
   sudo install -o root -g root -m 0644 "api/$file" \
     "/usr/local/lib/civicrm-bridge-api/api/$file"
+done
+for file in __init__.py controller.py instances.py instance_contract.py templates.py; do
+  sudo install -o root -g root -m 0644 "lifecycle/$file" \
+    "/usr/local/lib/civicrm-bridge-api/lifecycle/$file"
 done
 sudo install -o root -g root -m 0644 tools/world_worker.py \
   /usr/local/lib/civicrm-bridge-api/tools/world_worker.py
@@ -218,25 +234,113 @@ or query-string tokens.
 | Endpoint | Behavior |
 | --- | --- |
 | `GET /v1/worlds` | Existing saved maps from the configured world allowlist; independent of running/stopped status |
-| `POST /v1/worlds/{world_id}/accounts/jobs` | Account v1 JSON, world `dev` or `test` |
+| `GET /v1/world-templates` | Published clean templates with stable IDs and SHA-256 revisions |
+| `POST /v1/worlds/{world_id}/accounts/jobs` | Account v1/v2 JSON; target must be a registered private game instance |
 | `GET /v1/worlds/{world_id}/accounts/jobs/{job_id}` | Account progress/result |
-| `POST /v1/lifecycle/jobs` | Lifecycle v1 JSON |
+| `POST /v1/lifecycle/jobs` | Legacy lifecycle v1 or private-instance lifecycle v2 JSON |
 | `GET /v1/lifecycle/jobs/{job_id}` | Lifecycle progress/result |
 
-The catalogue returns `{"version":1,"worlds":[{"world_id":"dev","name":"dev"},{"world_id":"test","name":"test"}]}`.
+For private-instance polling, `{world_id}` in the historical account route is
+the registered `instance_id`; the account JSON itself has no routing field.
+Template catalogues contain at most 1000 entries; each entry's fields and the
+portal workflow are specified in the integration contract.
+
+The legacy `/v1/worlds` catalogue returns `{"version":1,"worlds":[{"world_id":"dev","name":"dev"},{"world_id":"test","name":"test"}]}`.
 It checks for each configured map's regular `world.mt` file without starting the
 engine or creating a job. Unconfigured directories and filesystem paths are
 never returned. Removed maps are omitted; an empty list is a valid catalogue.
 Inspection failures return `503` with `world_catalogue_unavailable`, rather than
 publishing a partial list. Backends should retain their previous catalogue on
-failed fetches. Display names initially use the configured IDs and may be
-customized in the portal.
+failed fetches. Names in this legacy response use configured IDs. The portal
+instead synchronizes `/v1/world-templates`, retaining local display/selection
+settings and marking missing templates unavailable only after a successful fetch.
 
-Use the account schema in [INTEGRATION.md](INTEGRATION.md#account-request-v1)
-and lifecycle examples in [the example catalog](../examples/lifecycle/README.md).
+Use the [account v1/v2 schema](INTEGRATION.md#account-request-v1v2) and
+[private-instance v2 schema](INTEGRATION.md#private-instance-lifecycle-v2).
+The [example catalog](../examples/lifecycle/README.md) contains legacy v1
+maintenance fixtures, not the portal's private-copy allocation workflow.
 The API additionally rejects unknown JSON fields, duplicate keys, non-finite
 values, invalid usernames, roles, admission types and supplied passwords.
-Only `sync_accounts` and the four existing lifecycle operations are supported.
+`sync_accounts` targets registered private copies; template and legacy saved-world
+identifiers are rejected by the account API. Lifecycle v1 remains available for
+operator maintenance of `dev` and `test`.
+
+Lifecycle v2 accepts `create_instance`, `configure_instance`, `start_instance`,
+`stop_instance`, `instance_status`, and `archive_instance`. The backend persists
+the instance ID before creation. A copy starts disabled until configured; archival
+permanently disables it while retaining its save. The bridge reconciles schedules
+approximately every ten seconds while the API runs, including after restart;
+overlapping enabled windows are rejected. Timed account v2 adds a required
+`access_window` per account, enforced locally by the mod even without a fresh
+portal withdrawal. Keep clocks synchronized. Full fields/limits are in the
+integration contract.
+
+For publication, first upgrade the reviewed lifecycle installer from the `ben`
+session. It installs the root-owned publisher and prepares separate template,
+instance, and registry directories:
+
+```bash
+sudo /usr/bin/python3 -I /home/ben/.minetest/mods/civicrm_bridge/lifecycle/install.py
+```
+
+To explicitly use the existing `dev` and `test` maps as templates, run this reviewed
+export from the same `ben` session:
+
+```bash
+sudo /usr/bin/python3 -I /home/ben/.minetest/mods/civicrm_bridge/tools/export_legacy_templates.py
+```
+
+The export holds the controller lock, briefly stops a running legacy world, and
+restores it even if publication fails. It keeps the original saves and publishes
+`dev` and `test` at `/home/ben/luanti-dev/templates/dev-v1` and `test-v1`. Only
+`world.mt`, the SQLite map snapshot, and optional map/environment metadata are
+included. Accounts, player databases, all mod storage, world-local code and bridge
+runtime are excluded; player progress starts fresh. This deliberately omits mod
+storage rather than assuming old mod state is safe to reuse. Existing valid
+publications are retained on retries. The command prints the paths but does not
+change controller/API configuration or restart the API. After exporting both maps,
+activate their reviewed private-game API upgrade from `ben`:
+
+```bash
+sudo /usr/bin/python3 -I /home/ben/.minetest/mods/civicrm_bridge/api/upgrade.py
+```
+
+This upgrade registers `dev`/`test` in both configurations, installs the reviewed
+API code snapshot and exact instance-controller sudo permissions, and restarts an
+already running API. It retains the token, job state, existing configuration
+values and the running game. It also repairs inherited bundle ACLs so the API can
+read template content. Backups and ACLs are retained under
+`/var/lib/civicrm-worldctl/private-games-backup-*`; failed activation restores
+the previous installed files and ACLs. Custom token/state paths, conflicting
+template registrations and unrecognized managed-file changes require separate
+review. Future controller upgrades retain registered template/revision mappings.
+
+For a separately prepared template, publish a stopped, clean SQLite world directory
+(replace `/path/to/reviewed-clean-world` with its actual path):
+
+```bash
+sudo /usr/bin/python3 -I /usr/local/lib/civicrm-worldctl/publish_template.py \
+  --source /path/to/reviewed-clean-world \
+  --destination /home/ben/luanti-dev/templates/classroom-v1 \
+  --template-id classroom --name 'Classroom'
+```
+
+The source must contain `world.mt` and `map.sqlite`. Optional files are
+`map_meta.txt`, `env_meta.txt`, and reviewed `mod_storage.sqlite` without bridge
+state. Authentication/player databases, world-local code, logs, runtime directories,
+and SQLite journals are rejected. Published destinations cannot be overwritten.
+Register the same `templates` mapping in the root-owned controller and API
+configurations, e.g. `{"classroom":"/home/ben/luanti-dev/templates/classroom-v1"}`.
+Retain immutable revision directories referenced by existing applications.
+When publishing a newer revision under the same template ID, list retained paths
+in the controller's `template_revisions` mapping, for example
+`{"classroom":["/home/ben/luanti-dev/templates/classroom-v1"]}`, so interrupted
+creation can still resolve the exact approved revision.
+Restart the API after installing its reviewed code/configuration snapshot; do not
+restart the game service to publish a template. These setup steps require the
+operator's `ben` session; the integration account has no general sudo permission.
+
+The legacy start/switch operations retain these restrictions:
 Start/switch require `world_id: dev` or `test`; arbitrary paths, commands, games
 and service names are not request parameters. Limits are 256 KiB for accounts
 and 16 KiB for lifecycle jobs. Compressed request bodies are rejected.
@@ -250,8 +354,12 @@ Durably accepted POSTs return `202`, a relative `Location` header and an envelop
 Poll `result_url` with the same bearer header. GET returns `200` and `state`
 equal to `pending`, `completed` or `outcome_unknown`. Terminal envelopes add
 `result`, containing the original account/controller response. Account envelopes
-also include `world_id`. Completion is not necessarily success: inspect account
-`status`/per-account outcomes or lifecycle `ok`, `ready`, world and rollback fields.
+also include `world_id` (the private instance ID for portal jobs). Completion is
+not necessarily success: inspect account `status`/per-account outcomes, instance
+v2 `ok`/`state`/`error.code`, or legacy v1 readiness/world/rollback fields. There is
+no browser/public health route. The portal's authenticated unknown-job probe checks
+API reachability/token acceptance, not game readiness; its HTTP client enforces
+HTTPS, disables redirects and bounds response downloads to 256 KiB.
 
 | HTTP status | Meaning |
 | --- | --- |
@@ -265,8 +373,9 @@ also include `world_id`. Completion is not necessarily success: inspect account
 | `415` | Wrong media type or unsupported content encoding |
 | `503` | State unavailable; inspect outcome before new decisions |
 
-Python backend example using only the standard library. `token_file` is a secret
-file on the backend, not the API's digest file:
+Python backend example using only the standard library. Replace the fictitious
+instance ID with an already registered private copy. `token_file` is a private
+backend secret file, not the API's digest file:
 
 ```python
 import json
@@ -280,7 +389,9 @@ token_file = Path("/private/backend/luanti-bridge.token")
 headers = {"Authorization": "Bearer " + token_file.read_text().strip(),
            "Content-Type": "application/json"}
 job_id = "backend-status-" + uuid.uuid4().hex
-raw = json.dumps({"version": 1, "job_id": job_id, "operation": "status"}).encode()
+instance_id = "g00000000000000000000000000"  # Replace with the saved instance ID.
+raw = json.dumps({"version": 2, "job_id": job_id,
+                  "operation": "instance_status", "instance_id": instance_id}).encode()
 # Persist this ID, endpoint and exact raw bytes securely BEFORE delivery.
 # A transport retry must reuse those bytes; a new status query needs a new ID.
 request = Request(base_url + "/v1/lifecycle/jobs", data=raw,
@@ -299,14 +410,16 @@ if job["state"] == "outcome_unknown":
 print(job["result"])  # Results only, never headers or submitted passwords.
 ```
 
-For accounts, change the POST URL to `/v1/worlds/test/accounts/jobs` and use an
-account example with a fresh ID. A valid batch can partially succeed. Existing
-passwords are preserved; admission is independent of role; withdrawal kicks
-online players and retains their account/data.
+For accounts, POST the [account v2 example](INTEGRATION.md#account-request-v1v2)
+with a fresh ID to `/v1/worlds/g00000000000000000000000000/accounts/jobs`, replacing
+that fictitious ID with the registered private instance. Poll its returned job
+path. Legacy `test`/`dev` IDs and template IDs are rejected by this account route.
+A valid batch can partially succeed; existing passwords are preserved, and
+withdrawal/expiry kicks players while retaining accounts/data.
 
 ## Retry, ordering and crash recovery
 
-Account IDs are world-scoped; lifecycle IDs are global. Identical bytes with
+Account job IDs are instance-scoped; lifecycle job IDs are global. Identical bytes with
 the same ID return the original job. Changed whitespace conflicts too. A replay
 of an old status job returns its historical snapshot, not current world status.
 
@@ -317,10 +430,12 @@ mod retains filename ordering, so wait for dependent decisions to complete
 before submitting the next one.
 
 Undispatched accepted jobs resume after API restart. Interrupted lifecycle
-dispatch replays a worker receipt if one exists; otherwise it reports
-`outcome_unknown` without executing again. Ambiguous account publication also
-reports unknown instead of assuming an old outbox proves completion. A network
-timeout is not proof of rejection. Never delete state to force replay.
+dispatch replays a terminal worker receipt if one exists. An interrupted v1
+request otherwise reports `outcome_unknown` without executing again; v2 instance
+requests can resume through the controller's instance identity/generation checks.
+A recorded terminal result remains a replay, not a fresh execution. Ambiguous
+account publication reports unknown rather than assuming an old outbox proves
+completion. A timeout is not proof of rejection. Never delete state to force replay.
 
 Use a fresh status job and operator inspection to resolve uncertain outcomes;
 the controller may still be completing. Check rollback details after failed
@@ -329,7 +444,8 @@ After terminal completion/unknown, API request blobs are removed; private
 pending account jobs can contain initial passwords. SQLite uses secure deletion
 of removed request blobs and no persistent WAL.
 
-Back up `/var/lib/civicrm-bridge-api` privately with the world bridge state.
+Back up `/var/lib/civicrm-bridge-api` privately with saves, world bridge state,
+the controller registry/selection/configuration and referenced template revisions.
 `jobs.sqlite3` and `lifecycle/receipts.sqlite3` are separate from the CLI worker's
 home-directory receipts. Losing API state loses its acceptance/deduplication
 history. Completed records have no automatic expiry.
@@ -365,6 +481,20 @@ generate a token during an upgrade. Shutdown waits for an in-flight lifecycle
 worker; forced interruption is recovered conservatively. Roll back code with
 its matching dependency environment while retaining state and token configuration.
 
+For the private-instance upgrade, copy the reviewed `lifecycle` helper modules
+into the installed API snapshot as shown above. Preserve the existing API
+configuration and add `instances_root: "/home/ben/luanti-dev/instances"`,
+`instance_registry: "/var/lib/civicrm-worldctl/instances"`, and the published
+`templates` mapping. Apply the reviewed unit/sudoers changes for the fixed
+`instance` and `reconcile_instances` commands and the instance inbox sandbox.
+This feature adds no runtime dependencies and does not require token replacement.
+
+Keep backend and bridge versions compatible when rolling back: old v1-only
+snapshots do not implement private-instance routing/timed accounts. A source
+checkout update alone does not upgrade installed code. The separate portal's
+template migration requires a destructive local reset for existing development
+records; that is not a production data-conversion procedure.
+
 Administrator checks:
 
 ```bash
@@ -396,3 +526,7 @@ real HTTPS proxy test. It uses temporary certificates and random loopback ports
 and does not install/configure production proxy services. The real-engine API
 fixture checks import, password preservation, withdrawal, role/admission
 independence and replay in a disposable Luanti world.
+
+## Docker development endpoint
+
+The existing HTTP routes and account/lifecycle job versions also serve Docker installations. Idle status may have `selected_world_id: null`; private-instance operations retain their contracts. See [Docker installation and Windows development](../lifecycle/README.md#docker-backend) for the separate installer and `bridge check/test/up` commands. The development API and HTTPS proxy bind to VM loopback only and are reached through pinned SSH at `https://localhost:18443`. The local portal trusts the deployment's public CA only for this exact origin in `APP_ENV=local`; certificate verification is never disabled.

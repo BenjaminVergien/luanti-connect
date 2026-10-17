@@ -44,7 +44,7 @@ class EngineBackend:
         self.stops = 0
         self.sequence = 0
 
-    def start(self):
+    def start(self, world_id=None, world_path=None):
         assert not self.process or self.process.poll() is not None, "Starting a second engine"
         selected = json.loads(self.state_path.read_text())["world_id"]
         self.world = Path(self.config["worlds"][selected])
@@ -285,7 +285,7 @@ class NeverReadyBackend:
         return {"active": self.active, "pid": 123456 if self.active else 0,
                 "world_path": self.world if self.active else None, "ready": False}
 
-    def start(self):
+    def start(self, world_id=None, world_path=None):
         self.starts += 1
         self.active = True
         self.world = self.config["worlds"][json.loads(self.state.read_text())["world_id"]]
@@ -390,7 +390,7 @@ def run_systemd_fixtures(config, state, lock):
                     "ready": self.active and not self.transitioning,
                     "transitioning": self.active and self.transitioning}
 
-        def start(self):
+        def start(self, world_id=None, world_path=None):
             super().start()
             self.transitioning = False
 
