@@ -27,7 +27,7 @@ API_ETC = Path('/etc/civicrm-bridge-api')
 API_STATE = Path('/var/lib/civicrm-bridge-api')
 SERVICE = 'civicrm-bridge-api.service'
 RUNTIME = {
-    'api': ('__init__.py', 'security.py', 'contract.py', 'tokens.py', 'jobs.py', 'worlds.py', 'app.py', 'serve.py'),
+    'api': ('__init__.py', 'security.py', 'contract.py', 'tokens.py', 'jobs.py', 'app.py', 'serve.py'),
     'lifecycle': ('__init__.py', 'controller.py', 'errors.py', 'docker_backend.py', 'instances.py', 'instance_contract.py', 'templates.py'),
     'tools': ('world_worker.py',),
 }

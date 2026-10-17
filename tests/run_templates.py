@@ -9,16 +9,12 @@ import sys
 import tempfile
 import unittest
 from contextlib import closing
-from contextlib import nullcontext
-from unittest.mock import Mock
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lifecycle.templates import catalogue, inspect_bundle, inspect_content
 from lifecycle.instance_contract import validate
 from lifecycle.controller import LifecycleError
 from tools.publish_template import publish
-from tools.export_legacy_templates import clean_source, export_maps
 
 
 class TemplateTests(unittest.TestCase):
@@ -143,75 +139,6 @@ class TemplateTests(unittest.TestCase):
                         {'access_window': {'starts_at': True, 'ends_at': 2}}, {'access_window': {'starts_at': 2, 'ends_at': 2}}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 validate({**valid, **changed})
-
-    def test_legacy_export_preserves_map_but_excludes_private_files(self):
-        for name in ('auth.sqlite', 'players.sqlite', 'mod_storage.sqlite', 'debug.txt'):
-            (self.source / name).write_text('private state')
-        (self.source / 'civicrm_bridge').mkdir()
-        (self.source / 'civicrm_bridge/state.json').write_text('private admission')
-        (self.source / 'map_meta.txt').write_text('seed = 123\n')
-        before = {path.name: path.read_bytes() for path in self.source.iterdir() if path.is_file()}
-        stage = self.base / 'clean'
-        stage.mkdir()
-        clean_source(self.source, stage)
-        self.assertEqual({path.name for path in stage.iterdir()}, {'world.mt', 'map.sqlite', 'map_meta.txt'})
-        with closing(sqlite3.connect(stage / 'map.sqlite')) as db:
-            self.assertEqual(db.execute('SELECT data FROM blocks WHERE pos=1').fetchone(), ('template block',))
-        self.assertEqual(before, {path.name: path.read_bytes() for path in self.source.iterdir() if path.is_file()})
-        inspect_content(stage)
-
-    def test_legacy_export_rejects_links_in_allowed_files(self):
-        stage = self.base / 'clean'
-        stage.mkdir()
-        (self.source / 'map_meta.txt').symlink_to(self.base / 'outside')
-        with self.assertRaises(OSError):
-            clean_source(self.source, stage)
-
-    def legacy_controller(self, active=True):
-        return SimpleNamespace(
-            config={'worlds': {'dev': str(self.source), 'test': str(self.source)}},
-            _lock=Mock(return_value=nullcontext()),
-            _status=Mock(return_value={'active': active, 'world_id': 'dev' if active else None}),
-            validate_world=Mock(), backend=Mock(), _wait_stopped=Mock(), _wait_ready=Mock())
-
-    def test_legacy_export_restores_running_world_and_reuses_published_copies(self):
-        root = self.base / 'templates'
-        root.mkdir()
-        controller = self.legacy_controller()
-        results = export_maps(controller, root, publish, inspect_bundle)
-        self.assertEqual([item['template_id'] for item in results], ['dev', 'test'])
-        controller.backend.stop.assert_called_once()
-        controller.backend.start.assert_called_once()
-        controller._wait_ready.assert_called_once_with('dev')
-        again = self.legacy_controller()
-        results = export_maps(again, root, publish, inspect_bundle)
-        self.assertTrue(all(item['reused'] for item in results))
-        again.backend.stop.assert_not_called()
-        again.backend.start.assert_not_called()
-
-    def test_legacy_export_restores_running_world_after_publication_failure(self):
-        root = self.base / 'templates'
-        root.mkdir()
-        controller = self.legacy_controller()
-        with self.assertRaises(OSError):
-            export_maps(controller, root, Mock(side_effect=OSError('disk full')), inspect_bundle)
-        controller.backend.start.assert_called_once()
-        controller._wait_ready.assert_called_once_with('dev')
-        self.assertEqual(list(root.iterdir()), [])
-
-    def test_legacy_export_does_not_start_stopped_service_or_stop_a_private_game(self):
-        root = self.base / 'templates'
-        root.mkdir()
-        controller = self.legacy_controller(active=False)
-        export_maps(controller, root, publish, inspect_bundle)
-        controller.backend.start.assert_not_called()
-        controller.backend.stop.assert_not_called()
-        controller = self.legacy_controller()
-        controller._status.return_value = {'active': True, 'world_id': 'g' + '0' * 26}
-        with self.assertRaises(ValueError):
-            export_maps(controller, root, publish, inspect_bundle)
-        controller.backend.stop.assert_not_called()
-
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

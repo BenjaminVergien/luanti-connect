@@ -129,34 +129,6 @@ class ApiTests(Fixture):
             self.assertNotIn('initial_password', json.dumps(completed))
             self.assertEqual(client.post('/v1/worlds/dev/accounts/jobs', content=raw, headers=self.headers).status_code, 200)
 
-    def test_saved_map_catalogue_is_authenticated_and_has_no_jobs_or_lifecycle_side_effects(self):
-        for world in ('dev', 'test'):
-            root = self.base / 'maps' / world
-            root.mkdir(parents=True)
-            (root / 'world.mt').write_text('gameid = minetest\n')
-            self.config['worlds'][world] = str(root / 'civicrm_bridge')
-        app = self.app()
-        with TestClient(app) as client:
-            self.assertEqual(client.get('/v1/worlds').status_code, 401)
-            response = client.get('/v1/worlds', headers=self.headers)
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.headers['cache-control'], 'no-store')
-            self.assertEqual(response.json(), {'version': 1, 'worlds': [
-                {'world_id': 'dev', 'name': 'dev'}, {'world_id': 'test', 'name': 'test'}]})
-            self.assertNotIn(str(self.base), response.text)
-            self.assertEqual(app.state.jobs.rows('SELECT * FROM jobs'), [])
-            (self.base / 'maps/test/world.mt').unlink()
-            self.assertEqual(client.get('/v1/worlds', headers=self.headers).json()['worlds'],
-                             [{'world_id': 'dev', 'name': 'dev'}])
-        self.assertEqual(self.calls, [])
-
-    def test_failed_catalogue_does_not_disclose_private_exception_text(self):
-        with TestClient(self.app()) as client, patch('api.app.catalogue', side_effect=OSError('private path')):
-            response = client.get('/v1/worlds', headers=self.headers)
-            self.assertEqual(response.status_code, 503)
-            self.assertEqual(response.json(), {'version': 1, 'error': {'code': 'world_catalogue_unavailable'}})
-            self.assertNotIn('private', response.text)
-
     def test_authentication_precedes_all_routing_and_side_effects(self):
         app = self.app()
         with TestClient(app) as client:
@@ -318,6 +290,7 @@ class InstanceApiTests(Fixture):
 
     def test_template_catalogue_is_authenticated_and_templates_cannot_receive_accounts(self):
         with TestClient(self.app()) as client:
+            self.assertEqual(client.get('/v1/worlds', headers=self.headers).status_code, 404)
             self.assertEqual(client.get('/v1/world-templates').status_code, 401)
             response = client.get('/v1/world-templates', headers=self.headers)
             self.assertEqual(response.json(), {'version': 1, 'templates': [

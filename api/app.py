@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse
 from api.contract import ACCOUNT_MAX, LIFECYCLE_MAX, JOB_ID, validate_accounts, validate_lifecycle
 from api.jobs import Conflict, Jobs
 from api.security import authenticated
-from api.worlds import catalogue
 from lifecycle.templates import catalogue as template_catalogue
 from lifecycle.instances import runtime_for
 
@@ -104,14 +103,6 @@ def create_app(config, runner=None, background=True):
                 return error(404, 'unknown_instance')
         value = await asyncio.to_thread(app.state.jobs.get, kind, world, job_id)
         return JSONResponse(value) if value else error(404, 'unknown_job')
-
-    @app.get('/v1/worlds')
-    async def list_worlds():
-        try:
-            value = await asyncio.to_thread(catalogue, config)
-        except (OSError, ValueError, TypeError):
-            return error(503, 'world_catalogue_unavailable')
-        return JSONResponse(value)
 
     @app.get('/v1/world-templates')
     async def list_templates():

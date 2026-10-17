@@ -51,8 +51,8 @@ def test(settings):
     environment['PATH'] = str(run / 'bin') + os.pathsep + os.environ['PATH']
     environment['CADDY_BIN'] = '/usr/bin/caddy'
     suites = [
-        ['run_docker.py'], ['run_docker_installer.py'], ['run_instances.py'], ['run_templates.py'], ['run_upgrade.py'],
-        ['run_world_catalogue.py'], ['run_world_security.py'], ['run_world_worker.py'], ['run_api.py'],
+        ['run_docker.py'], ['run_docker_installer.py'], ['run_instances.py'], ['run_templates.py'],
+        ['run_world_security.py'], ['run_world_worker.py'], ['run_api.py'],
         ['run_lifecycle.py', '--mock-only', '--base', str(fixture), '--engine', str(adapter), '--game-path', settings['game_source']],
         ['run_docker_integration.py', '--image', image, '--game-path', settings['game_source'], '--base', str(fixture)],
         ['run_integration.py', '--engine', str(adapter), '--base', str(fixture), '--game-path', settings['game_source']],

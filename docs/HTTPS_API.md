@@ -112,7 +112,7 @@ sudo install -d -o root -g root -m 0755 \
 sudo install -d -o civicrm_bridge_api -g civicrm_bridge_api -m 0700 \
   /var/lib/civicrm-bridge-api
 
-for file in __init__.py security.py contract.py tokens.py jobs.py worlds.py app.py serve.py; do
+for file in __init__.py security.py contract.py tokens.py jobs.py app.py serve.py; do
   sudo install -o root -g root -m 0644 "api/$file" \
     "/usr/local/lib/civicrm-bridge-api/api/$file"
 done
@@ -233,7 +233,6 @@ or query-string tokens.
 
 | Endpoint | Behavior |
 | --- | --- |
-| `GET /v1/worlds` | Existing saved maps from the configured world allowlist; independent of running/stopped status |
 | `GET /v1/world-templates` | Published clean templates with stable IDs and SHA-256 revisions |
 | `POST /v1/worlds/{world_id}/accounts/jobs` | Account v1/v2 JSON; target must be a registered private game instance |
 | `GET /v1/worlds/{world_id}/accounts/jobs/{job_id}` | Account progress/result |
@@ -245,15 +244,10 @@ the registered `instance_id`; the account JSON itself has no routing field.
 Template catalogues contain at most 1000 entries; each entry's fields and the
 portal workflow are specified in the integration contract.
 
-The legacy `/v1/worlds` catalogue returns `{"version":1,"worlds":[{"world_id":"dev","name":"dev"},{"world_id":"test","name":"test"}]}`.
-It checks for each configured map's regular `world.mt` file without starting the
-engine or creating a job. Unconfigured directories and filesystem paths are
-never returned. Removed maps are omitted; an empty list is a valid catalogue.
-Inspection failures return `503` with `world_catalogue_unavailable`, rather than
-publishing a partial list. Backends should retain their previous catalogue on
-failed fetches. Names in this legacy response use configured IDs. The portal
-instead synchronizes `/v1/world-templates`, retaining local display/selection
-settings and marking missing templates unavailable only after a successful fetch.
+The portal owns the template library and commissions its complete creation
+snapshot when provisioning a new server. `GET /v1/world-templates` verifies that
+the bridge has installed those exact immutable revisions; it does not populate
+or synchronize the portal library. `/v1/worlds` saved-map discovery was removed.
 
 Use the [account v1/v2 schema](INTEGRATION.md#account-request-v1v2) and
 [private-instance v2 schema](INTEGRATION.md#private-instance-lifecycle-v2).
@@ -275,70 +269,20 @@ overlapping enabled windows are rejected. Timed account v2 adds a required
 portal withdrawal. Keep clocks synchronized. Full fields/limits are in the
 integration contract.
 
-For publication, first upgrade the reviewed lifecycle installer from the `ben`
-session. It installs the root-owned publisher and prepares separate template,
-instance, and registry directories:
+Publish a stopped, clean SQLite world with `tools/publish_template.py`, then
+package the published directory's files at the ZIP root and import it into the
+portal library. The bundle contains `manifest.json`, `world.mt`, `map.sqlite`,
+and optional `map_meta.txt`, `env_meta.txt`, or reviewed `mod_storage.sqlite`
+without bridge state. Accounts, player saves, world-local code, logs, runtime
+directories and SQLite journals are rejected.
 
-```bash
-sudo /usr/bin/python3 -I /home/ben/.minetest/mods/civicrm_bridge/lifecycle/install.py
-```
-
-To explicitly use the existing `dev` and `test` maps as templates, run this reviewed
-export from the same `ben` session:
-
-```bash
-sudo /usr/bin/python3 -I /home/ben/.minetest/mods/civicrm_bridge/tools/export_legacy_templates.py
-```
-
-The export holds the controller lock, briefly stops a running legacy world, and
-restores it even if publication fails. It keeps the original saves and publishes
-`dev` and `test` at `/home/ben/luanti-dev/templates/dev-v1` and `test-v1`. Only
-`world.mt`, the SQLite map snapshot, and optional map/environment metadata are
-included. Accounts, player databases, all mod storage, world-local code and bridge
-runtime are excluded; player progress starts fresh. This deliberately omits mod
-storage rather than assuming old mod state is safe to reuse. Existing valid
-publications are retained on retries. The command prints the paths but does not
-change controller/API configuration or restart the API. After exporting both maps,
-activate their reviewed private-game API upgrade from `ben`:
-
-```bash
-sudo /usr/bin/python3 -I /home/ben/.minetest/mods/civicrm_bridge/api/upgrade.py
-```
-
-This upgrade registers `dev`/`test` in both configurations, installs the reviewed
-API code snapshot and exact instance-controller sudo permissions, and restarts an
-already running API. It retains the token, job state, existing configuration
-values and the running game. It also repairs inherited bundle ACLs so the API can
-read template content. Backups and ACLs are retained under
-`/var/lib/civicrm-worldctl/private-games-backup-*`; failed activation restores
-the previous installed files and ACLs. Custom token/state paths, conflicting
-template registrations and unrecognized managed-file changes require separate
-review. Future controller upgrades retain registered template/revision mappings.
-
-For a separately prepared template, publish a stopped, clean SQLite world directory
-(replace `/path/to/reviewed-clean-world` with its actual path):
-
-```bash
-sudo /usr/bin/python3 -I /usr/local/lib/civicrm-worldctl/publish_template.py \
-  --source /path/to/reviewed-clean-world \
-  --destination /home/ben/luanti-dev/templates/classroom-v1 \
-  --template-id classroom --name 'Classroom'
-```
-
-The source must contain `world.mt` and `map.sqlite`. Optional files are
-`map_meta.txt`, `env_meta.txt`, and reviewed `mod_storage.sqlite` without bridge
-state. Authentication/player databases, world-local code, logs, runtime directories,
-and SQLite journals are rejected. Published destinations cannot be overwritten.
-Register the same `templates` mapping in the root-owned controller and API
-configurations, e.g. `{"classroom":"/home/ben/luanti-dev/templates/classroom-v1"}`.
-Retain immutable revision directories referenced by existing applications.
-When publishing a newer revision under the same template ID, list retained paths
-in the controller's `template_revisions` mapping, for example
-`{"classroom":["/home/ben/luanti-dev/templates/classroom-v1"]}`, so interrupted
-creation can still resolve the exact approved revision.
-Restart the API after installing its reviewed code/configuration snapshot; do not
-restart the game service to publish a template. These setup steps require the
-operator's `ben` session; the integration account has no general sudo permission.
+The portal sends every library bundle to the new server over its pinned SSH
+connection during bridge installation. The Docker installer validates bundles,
+copies them into its managed template directory, configures the controller and
+API, and grants API read access. The portal verifies the installed catalogue
+before making server copies selectable. Library revisions are pinned at server
+creation; retries retain those exact bytes and existing server saves remain
+independent. On-demand commissioning is reserved for a later change.
 
 The legacy start/switch operations retain these restrictions:
 Start/switch require `world_id: dev` or `test`; arbitrary paths, commands, games

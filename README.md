@@ -107,7 +107,7 @@ Existing Linux checks use disposable worlds/state and loopback ports, not the
 live development service: `tests/run_integration.py`, `tests/run_examples.py`,
 `tests/run_lifecycle.py` (`--mock-only` skips engine processes),
 `tests/run_world_security.py`, `tests/run_world_worker.py`, `tests/run_templates.py`,
-`tests/run_instances.py`, `tests/run_world_catalogue.py` and `tests/run_upgrade.py`.
+`tests/run_instances.py` and `tests/run_docker_installer.py`.
 API dependencies and checks are described in the HTTPS guide. Run these only in
 their supported environment; their presence is not a claim that a deployment was
 tested. Real-client login/admission checks remain an operator validation step.

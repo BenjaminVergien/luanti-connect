@@ -6,7 +6,14 @@
 
 ## Current portal flow
 
-Discover published templates with `GET /v1/world-templates`, returning an envelope with integer `version: 1` and a `templates` array. Each entry contains `template_id`, `name` and `revision`. IDs match `[A-Za-z0-9_-]{1,32}`, names are nonempty (up to 255 characters), and revisions are 64 lowercase hexadecimal characters identifying immutable SHA-256 bundles. An empty list is valid; retain the previous catalogue on fetch/validation failure. A template is not a playable instance. `/v1/worlds` is the separate legacy saved-world catalogue.
+The portal stores published template bundles in its private library and
+commissions every current template during new-server creation. The creation
+snapshot pins immutable revisions and bytes for retries. The installer verifies
+`GET /v1/world-templates` against that snapshot; server discovery does not update
+the portal library. The response has integer `version: 1` and a `templates` array
+containing `template_id`, `name` and `revision`. IDs match `[A-Za-z0-9_-]{1,32}`,
+names contain up to 255 characters, and revisions are SHA-256 hashes. Templates
+are never playable instances. The old `/v1/worlds` discovery endpoint is removed.
 
 Approval reserves one non-overlapping period on a server and selects a template revision. The portal creates a private copy, configures its approved window and starts it when due; it submits account v2 jobs to that instance. Windows use UTC Unix seconds, inclusive `starts_at` and exclusive `ends_at`. Portal calendar dates cover whole days in `Europe/Berlin`, including clock changes. Date edits retain the previous approval until reapproved; an extension reuses the save.
 
